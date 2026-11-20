@@ -3,6 +3,7 @@ mod api;
 mod auth;
 mod config;
 mod events;
+mod sleep;
 mod temp;
 mod ui;
 
@@ -21,6 +22,7 @@ const EXAMPLES: &str = "\
   8sleep temp -3          set the target on the app's -10..+10 scale
   8sleep off
   8sleep away on
+  8sleep sleep            how you slept last night
   8sleep alarm 8:30pm     move your alarm
   8sleep status --json";
 
@@ -102,6 +104,15 @@ enum Cmd {
         /// How far back: a duration (12h, 7d, 2w) or a date (2026-11-19).
         #[arg(long, default_value = "24h", value_parser = events::parse_since)]
         since: jiff::Timestamp,
+    },
+    /// Show how you slept: times, stages, scores, heart rate, HRV, breathing, snoring, temperatures
+    ///
+    /// Last night by default. `--json` adds the API's whole night (every
+    /// session's stages and timeseries) under `raw`.
+    Sleep {
+        /// Every night since: a duration (7d, 2w) or a date (2026-11-19).
+        #[arg(long, value_parser = events::parse_since)]
+        since: Option<jiff::Timestamp>,
     },
     /// Manage alarms
     ///
@@ -334,6 +345,10 @@ fn run(cli: Cli) -> Result<()> {
         Cmd::Events { since } => {
             let user = target_user(&api, cli.side)?;
             events_cmd(&api, &user, since, cli.json)
+        }
+        Cmd::Sleep { since } => {
+            let user = target_user(&api, cli.side)?;
+            sleep_cmd(&api, &user, since, cli.json)
         }
         Cmd::Alarm {
             sub,
@@ -954,6 +969,38 @@ fn print_side(
 
 /// `8sleep events`. The temperature read supplies the running phase's
 /// start, which the log doesn't record.
+/// Nights since `since`, or the latest night in the past week.
+fn sleep_cmd(api: &Api, user: &str, since: Option<jiff::Timestamp>, as_json: bool) -> Result<()> {
+    let tz = jiff::tz::TimeZone::system();
+    let today = jiff::Zoned::now().date();
+    let from = match since {
+        Some(t) => t.to_zoned(tz).date(),
+        None => today.checked_sub(jiff::Span::new().days(7))?,
+    };
+    let trends = api.get(&sleep::url(user, from, today))?;
+    let mut nights = sleep::nights(&trends);
+    if since.is_none() {
+        nights.truncate(1);
+    }
+    let list: Vec<Value> = nights.into_iter().map(sleep::summary).collect();
+    if as_json {
+        println!("{}", serde_json::to_string_pretty(&list)?);
+        return Ok(());
+    }
+    if list.is_empty() {
+        println!("no sleep recorded since {from}");
+    }
+    for (i, n) in list.iter().enumerate() {
+        if i > 0 {
+            println!();
+        }
+        for line in sleep::lines(n) {
+            println!("{line}");
+        }
+    }
+    Ok(())
+}
+
 fn events_cmd(api: &Api, user: &str, since: jiff::Timestamp, as_json: bool) -> Result<()> {
     let (log, t) = std::thread::scope(|sc| {
         let t = sc.spawn(|| api.get(&format!("{APP_API}/users/{user}/temperature")));
