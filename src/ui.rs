@@ -74,12 +74,15 @@ fn gauge_cell(raw: i32) -> i32 {
 }
 
 /// A cool→warm bar marking the target (◆) and, when known, the current
-/// level (●). The stretch between them is drawn heavy to show which way the
-/// bed is heading.
-fn gauge(target: i32, now: Option<i32>) -> String {
+/// level (●). While the bed is on, the stretch between them is drawn heavy to
+/// show which way it's heading; when it's off nothing is heading anywhere.
+fn gauge(target: i32, now: Option<i32>, on: bool) -> String {
     let t = gauge_cell(target);
     let n = now.map(gauge_cell);
-    let (lo, hi) = n.map_or((t, t), |n| (n.min(t), n.max(t)));
+    let (lo, hi) = match n {
+        Some(n) if on => (n.min(t), n.max(t)),
+        _ => (t, t),
+    };
     let bar: String = (0..GAUGE_CELLS)
         .map(|i| {
             let (r, g, b) = level_rgb(i * 200 / (GAUGE_CELLS - 1) - 100);
@@ -168,7 +171,8 @@ pub fn side_block(title: &str, you: bool, s: &Value) -> Vec<String> {
 
     let mut lines = vec![head];
     let target = s["target"].as_i64().map(|v| v as i32);
-    let now = s["level"].as_i64().map(|v| v as i32).filter(|_| on);
+    // The API keeps reporting the current level while the bed is off.
+    let now = s["level"].as_i64().map(|v| v as i32);
     if let Some(t) = target {
         lines.push(row(TARGET_MARK, "target", temp_pair(t, true, false)));
     }
@@ -176,7 +180,7 @@ pub fn side_block(title: &str, you: bool, s: &Value) -> Vec<String> {
         lines.push(row(NOW_MARK, "current", temp_pair(n, false, true)));
     }
     if let Some(t) = target {
-        lines.push(row("", "", gauge(t, now)));
+        lines.push(row("", "", gauge(t, now, on)));
     }
     lines.extend(phase_rows(s));
     if let Some(alarm) = alarm_row(&s["alarm"]) {
