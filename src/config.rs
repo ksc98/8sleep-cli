@@ -2,8 +2,10 @@
 //!
 //! ```toml
 //! email = "you@example.com"
-//! password = "..."                 # or password_command = "pass show eightsleep"
-//! device_id = "..."                # the Pod; filled in on first run
+//! password = "..."
+//! # or, instead of email and password, a 1Password item:
+//! # onepassword = "op://Personal/EightSleep"
+//! device_id = "..."   # the Pod; filled in on first run
 //! ```
 //!
 //! Edits keep the file's comments and other keys (`toml_edit`).

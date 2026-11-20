@@ -59,19 +59,17 @@ and make the file readable only by you:
 chmod 600 ~/.config/8sleep/config.toml
 ```
 
-To keep the password out of the file, set `password_command` instead. Its
-output is the password, so it works with any password manager:
+With [1Password](https://developer.1password.com/docs/cli/), name the item
+instead and the CLI reads its username and password fields with `op read`:
 
 ```toml
-email = "you@example.com"
-password_command = "pass show eightsleep"
-# macOS Keychain: password_command = "security find-generic-password -s eightsleep -w"
+onepassword = "op://Personal/EightSleep"
 ```
 
 `EIGHTSLEEP_EMAIL` and `EIGHTSLEEP_PASSWORD` override the file.
 
 The password is only used to sign in. The CLI then keeps a token in
-`~/.cache/8sleep/token.json` (mode 0600) and refreshes it, so it asks for the
+`~/.cache/8sleep/token.json` (mode 0600) and refreshes it, so it signs in with the
 password again only if the refresh fails.
 
 The first run also looks up your Pod and saves its id in the same file

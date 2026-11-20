@@ -1,7 +1,7 @@
 //! Login, token refresh and the on-disk token cache.
 //!
-//! Credentials come from `EIGHTSLEEP_EMAIL` / `EIGHTSLEEP_PASSWORD` or the
-//! config file (`email`, and `password` or `password_command`). A password
+//! Credentials come from `EIGHTSLEEP_EMAIL` / `EIGHTSLEEP_PASSWORD`, the
+//! config file's `email` and `password`, or a 1Password item. A password
 //! login happens only when there is no cached refresh token or the refresh
 //! grant fails.
 
@@ -159,59 +159,52 @@ fn token_request(
     })
 }
 
+/// Email and password, each from the first of: the environment, the
+/// config's `email` / `password`, or the 1Password item named by the
+/// config's `onepassword` (its `username` and `password` fields).
 fn credentials() -> Result<(String, String)> {
     let path = crate::config::path()?;
+    let item = crate::config::get("onepassword")?;
     let missing = || {
         anyhow!(
-            "no Eight Sleep credentials: set EIGHTSLEEP_EMAIL and EIGHTSLEEP_PASSWORD, \
-             or `email` and `password` (or `password_command`) in {}",
+            "no Eight Sleep credentials: set `email` and `password`, or `onepassword = \"op://Vault/Item\"`, in {}",
             path.display()
         )
     };
-    let email = match std::env::var("EIGHTSLEEP_EMAIL") {
-        Ok(e) => e,
-        Err(_) => crate::config::get("email")?.ok_or_else(missing)?,
+    let field = |env: &str, key: &str, op_field: &str| -> Result<String> {
+        if let Ok(v) = std::env::var(env) {
+            return Ok(v);
+        }
+        if let Some(v) = crate::config::get(key)? {
+            if key == "password" {
+                warn_if_readable(&path);
+            }
+            return Ok(v);
+        }
+        match &item {
+            Some(item) => op_read(&format!("{}/{op_field}", item.trim_end_matches('/'))),
+            None => Err(missing()),
+        }
     };
-    if let Ok(p) = std::env::var("EIGHTSLEEP_PASSWORD") {
-        return Ok((email, p));
-    }
-    if let Some(p) = crate::config::get("password")? {
-        warn_if_readable(&path);
-        return Ok((email, p));
-    }
-    let cmd = crate::config::get("password_command")?.ok_or_else(missing)?;
-    Ok((email, password_from(&cmd)?))
+    Ok((
+        field("EIGHTSLEEP_EMAIL", "email", "username")?,
+        field("EIGHTSLEEP_PASSWORD", "password", "password")?,
+    ))
 }
 
-/// Run `password_command` through the shell; its output, minus the trailing
-/// newline, is the password.
-fn password_from(cmd: &str) -> Result<String> {
-    #[cfg(unix)]
-    let mut c = Command::new("sh");
-    #[cfg(unix)]
-    c.args(["-c", cmd]);
-    #[cfg(windows)]
-    let mut c = Command::new("cmd");
-    #[cfg(windows)]
-    c.args(["/C", cmd]);
-    let out = c
+/// `op read <reference>` with the 1Password CLI.
+fn op_read(reference: &str) -> Result<String> {
+    let out = Command::new("op")
+        .args(["read", "--no-newline", reference])
         .output()
-        .with_context(|| format!("running password_command `{cmd}`"))?;
+        .context("running `op`, the 1Password CLI (is it installed?)")?;
     if !out.status.success() {
-        let err = String::from_utf8_lossy(&out.stderr);
-        let err = err.trim();
-        if err.is_empty() {
-            bail!("password_command `{cmd}` failed ({})", out.status);
-        }
-        bail!("password_command `{cmd}` failed: {err}");
+        bail!(
+            "`op read {reference}` failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
     }
-    let pw = String::from_utf8(out.stdout).context("password_command printed non-UTF-8")?;
-    let pw = pw.strip_suffix('\n').unwrap_or(&pw);
-    let pw = pw.strip_suffix('\r').unwrap_or(pw);
-    if pw.is_empty() {
-        bail!("password_command `{cmd}` printed nothing");
-    }
-    Ok(pw.to_owned())
+    Ok(String::from_utf8(out.stdout)?)
 }
 
 /// A plaintext password belongs in a file only you can read.
