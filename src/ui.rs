@@ -209,14 +209,11 @@ pub fn side_block(title: &str, you: bool, s: &Value) -> Vec<String> {
 /// The smart schedule on one line: `now │ night │ dawn` (the running phase
 /// marked), then when it next starts and whether Autopilot is adjusting it.
 fn phase_rows(s: &Value) -> Vec<String> {
-    let (cells, mut notes) = phase_cells(&s["phases"]);
+    let cells = phase_cells(&s["phases"]);
     if cells.is_empty() {
         return Vec::new();
     }
-    if s["autopilot"].as_bool() == Some(true) {
-        notes.push("Autopilot on".to_string());
-    }
-    vec![row("", "schedule", with_notes(cells, &notes))]
+    vec![row("", "schedule", cells)]
 }
 
 /// `bedtime  2:15 AM daily · cools in 8h 30m`. The verb compares the
@@ -260,11 +257,10 @@ fn eta(secs: i64) -> String {
     }
 }
 
-/// `now 81°F 0 │ night 78°F -1 │ dawn 82°F 0`, plus a note for each phase
-/// running at a hand-set level instead of its scheduled one.
-fn phase_cells(phases: &Value) -> (String, Vec<String>) {
+/// `now 55°F -10 (schedule 0) │ night 78°F -1 │ dawn 82°F 0`: each phase's
+/// level, with the saved one in parentheses when it was set by hand.
+fn phase_cells(phases: &Value) -> String {
     let mut cells = Vec::new();
-    let mut notes = Vec::new();
     for p in phases.as_array().into_iter().flatten() {
         let Some(level) = p["level"].as_i64().map(|v| v as i32) else {
             continue;
@@ -277,25 +273,17 @@ fn phase_cells(phases: &Value) -> (String, Vec<String>) {
             name.dimmed().to_string()
         };
         let f = colored_level(&format!("{}°F", temp::raw_to_f(level)), level);
-        cells.push(format!("{label} {f} {}", temp::raw_to_app(level).dimmed()));
+        let mut cell = format!("{label} {f} {}", temp::raw_to_app(level).dimmed());
+        // A level set by hand while the phase runs: show the saved one too.
         if p["overridden"].as_bool() == Some(true)
             && let Some(sched) = p["scheduled"].as_i64()
         {
-            notes.push(format!(
-                "{name} {} set by hand, schedule says {}",
-                temp::raw_to_app(level),
-                temp::raw_to_app(sched as i32)
-            ));
+            let saved = format!("(schedule {})", temp::raw_to_app(sched as i32));
+            cell.push_str(&format!(" {}", saved.dimmed().italic()));
         }
+        cells.push(cell);
     }
-    (cells.join(&" │ ".dimmed().to_string()), notes)
-}
-
-fn with_notes(mut line: String, notes: &[String]) -> String {
-    if !notes.is_empty() {
-        line.push_str(&format!("   {}", notes.join(" · ").dimmed()));
-    }
-    line
+    cells.join(&" │ ".dimmed().to_string())
 }
 
 /// `8sleep schedule`: when it turns the bed on, then the level for each phase.
@@ -329,12 +317,16 @@ pub fn schedule_block(bedtimes: &[Value], phases: &Value, autopilot: bool) -> Ve
             ),
         ));
     }
-    let (cells, mut notes) = phase_cells(phases);
-    if autopilot {
-        notes.push("Autopilot adjusts these overnight".to_string());
-    }
+    let cells = phase_cells(phases);
     if !cells.is_empty() {
-        out.push(row("", "levels", with_notes(cells, &notes)));
+        let mut line = cells;
+        if autopilot {
+            line.push_str(&format!(
+                "   {}",
+                "Autopilot adjusts these overnight".dimmed()
+            ));
+        }
+        out.push(row("", "levels", line));
     }
     out
 }
