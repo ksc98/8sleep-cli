@@ -485,10 +485,29 @@ fn side_info(api: &Api, user: &str) -> Result<Value> {
         "target_f": target.map(temp::raw_to_f),
         "away": away["isAway"].as_bool(),
         "next_bedtime": t["nextSchedule"]["nextTimestamp"].as_str(),
+        "bedtime": bedtime(&t["nextSchedule"]),
         "autopilot": autopilot["isAutopilotActive"].as_bool(),
         "phases": phases(&t, &state),
         "alarm": alarms.as_ref().map_or(Value::Null, alarm::next),
     }))
+}
+
+/// The schedule's daily auto-start: `{time, days}` with days as the
+/// `weekDays` map alarms use, or null when the schedule is off.
+fn bedtime(sched: &Value) -> Value {
+    if sched["enabled"].as_bool() != Some(true) {
+        return Value::Null;
+    }
+    let days: serde_json::Map<String, Value> = alarm::WEEKDAYS
+        .iter()
+        .map(|d| {
+            let on = sched["days"]
+                .as_array()
+                .is_some_and(|a| a.iter().any(|x| x == d));
+            (d.to_string(), Value::Bool(on))
+        })
+        .collect();
+    json!({ "time": sched["time"], "days": days })
 }
 
 /// The smart schedule's three phases, in order: (state suffix and

@@ -208,8 +208,12 @@ fn phase_rows(s: &Value) -> Vec<String> {
     if cells.is_empty() {
         return Vec::new();
     }
-    if let Some(next) = when(s["next_bedtime"].as_str()) {
-        notes.push(format!("starts {next}"));
+    if let Some(time) = s["bedtime"]["time"].as_str() {
+        notes.push(format!(
+            "bedtime {} {}",
+            alarm::clock(time),
+            days_summary(&s["bedtime"]["days"])
+        ));
     }
     if s["autopilot"].as_bool() == Some(true) {
         notes.push("Autopilot".to_string());
@@ -305,7 +309,7 @@ fn days_summary(days: &Value) -> String {
         .map(|(k, _)| days[*k].as_bool() == Some(true))
         .collect();
     match on.as_slice() {
-        [true, true, true, true, true, true, true] => "every day".into(),
+        [true, true, true, true, true, true, true] => "daily".into(),
         [true, true, true, true, true, false, false] => "weekdays".into(),
         [false, false, false, false, false, true, true] => "weekends".into(),
         _ => DAYS
