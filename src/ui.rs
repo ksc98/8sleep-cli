@@ -65,10 +65,13 @@ fn gauge(target: i32, now: Option<i32>, on: bool) -> String {
     let bar: String = (0..GAUGE_CELLS)
         .map(|i| {
             let (r, g, b) = level_rgb(i * 200 / (GAUGE_CELLS - 1) - 100);
+            // Each marker takes the color of the level it marks.
             if i == t {
-                TARGET_MARK.bright_white().bold().to_string()
-            } else if Some(i) == n {
-                NOW_MARK.bright_white().to_string()
+                colored_level(TARGET_MARK, target).bold().to_string()
+            } else if let (Some(cell), Some(level)) = (n, now)
+                && i == cell
+            {
+                colored_level(NOW_MARK, level)
             } else if i > lo && i < hi {
                 "━".truecolor(r, g, b).bold().to_string()
             } else {
