@@ -18,7 +18,9 @@ pub const HELP_STYLES: Styles = Styles::styled()
     .valid(AnsiColor::BrightCyan.on_default().effects(Effects::BOLD))
     .invalid(AnsiColor::Yellow.on_default().effects(Effects::BOLD));
 
-const GAUGE_CELLS: i32 = 21; // one cell per app-scale step, -10..=+10
+const GAUGE_CELLS: i32 = 41; // one cell per half step of the app's -10..=+10 scale
+const TARGET_MARK: &str = "◆";
+const NOW_MARK: &str = "●";
 
 const COOL: (f64, f64, f64) = (80.0, 150.0, 255.0);
 const NEUTRAL: (f64, f64, f64) = (200.0, 200.0, 200.0);
@@ -52,24 +54,45 @@ fn temp_pair(raw: i32, bold: bool) -> String {
     format!("{f}  {}", format!("{:>4}", temp::raw_to_app(raw)).dimmed())
 }
 
-/// A cool→warm bar with a marker at `raw`.
-fn gauge(raw: i32) -> String {
-    let pos = ((raw.clamp(-100, 100) + 100) as f64 / 10.0).round() as i32;
+fn gauge_cell(raw: i32) -> i32 {
+    ((raw.clamp(-100, 100) + 100) as f64 * (GAUGE_CELLS - 1) as f64 / 200.0).round() as i32
+}
+
+/// A cool→warm bar marking the target (◆) and, when known, the current
+/// level (●). The stretch between them is drawn heavy to show which way the
+/// bed is heading.
+fn gauge(target: i32, now: Option<i32>) -> String {
+    let t = gauge_cell(target);
+    let n = now.map(gauge_cell);
+    let (lo, hi) = n.map_or((t, t), |n| (n.min(t), n.max(t)));
     let bar: String = (0..GAUGE_CELLS)
         .map(|i| {
-            let (r, g, b) = level_rgb(i * 10 - 100);
-            if i == pos {
-                "●".bright_white().bold().to_string()
+            let (r, g, b) = level_rgb(i * 200 / (GAUGE_CELLS - 1) - 100);
+            if i == t {
+                TARGET_MARK.bright_white().bold().to_string()
+            } else if Some(i) == n {
+                NOW_MARK.bright_white().to_string()
+            } else if i > lo && i < hi {
+                "━".truecolor(r, g, b).bold().to_string()
             } else {
-                "━".truecolor(r, g, b).to_string()
+                "─".truecolor(r, g, b).to_string()
             }
         })
         .collect();
     format!("{} {bar} {}", "cool".dimmed(), "warm".dimmed())
 }
 
-fn row(label: &str, value: impl std::fmt::Display) -> String {
-    format!("  {}{value}", format!("{label:<LABEL_WIDTH$}").dimmed())
+/// `  ◆ target   81°F`: an optional bar marker, a dimmed label, the value.
+fn row(mark: &str, label: &str, value: impl std::fmt::Display) -> String {
+    let mark = if mark.is_empty() {
+        " ".to_string()
+    } else {
+        mark.bright_white().to_string()
+    };
+    format!(
+        "  {mark} {}{value}",
+        format!("{label:<LABEL_WIDTH$}").dimmed()
+    )
 }
 
 /// `today 3:33 PM`, `tomorrow 2:15 AM`, `Fri 2:15 AM` or `Nov 12 3:33 PM`.
@@ -129,20 +152,22 @@ pub fn side_block(title: &str, you: bool, s: &Value) -> Vec<String> {
     head.push_str(&format!("   {power}   {}", state.dimmed()));
 
     let mut lines = vec![head];
-    if let Some(target) = s["target"].as_i64().map(|v| v as i32) {
-        lines.push(row(
-            "target",
-            format!("{}   {}", temp_pair(target, true), gauge(target)),
-        ));
+    let target = s["target"].as_i64().map(|v| v as i32);
+    let now = s["level"].as_i64().map(|v| v as i32).filter(|_| on);
+    if let Some(t) = target {
+        lines.push(row(TARGET_MARK, "target", temp_pair(t, true)));
     }
-    if on && let Some(level) = s["level"].as_i64().map(|v| v as i32) {
-        lines.push(row("now", temp_pair(level, false)));
+    if let Some(n) = now {
+        lines.push(row(NOW_MARK, "now", temp_pair(n, false)));
+    }
+    if let Some(t) = target {
+        lines.push(row("", "", gauge(t, now)));
     }
     if s["away"].as_bool() == Some(true) {
-        lines.push(row("away", "on".yellow().bold()));
+        lines.push(row("", "away", "on".yellow().bold()));
     }
     if let Some(next) = when(s["next_bedtime"].as_str()) {
-        lines.push(row("bedtime", next));
+        lines.push(row("", "bedtime", next));
     }
     lines
 }
