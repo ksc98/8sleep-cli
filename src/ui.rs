@@ -21,10 +21,11 @@ pub const HELP_STYLES: Styles = Styles::styled()
 const GAUGE_CELLS: i32 = 41; // one cell per half step of the app's -10..=+10 scale
 const TARGET_MARK: &str = "◆";
 const NOW_MARK: &str = "●";
-/// Half-height ticks joining a label to its marker: `╷` hangs from a label
-/// above the bar, `╵` rises to one below it.
-const TICK_ABOVE: &str = "╷";
-const TICK_BELOW: &str = "╵";
+/// Ticks joining a label to its marker. An ASCII `|` stops short of the cell
+/// edges in most fonts: between a full-height `│` (too long) and a half-height
+/// `╷` (too short).
+const TICK_ABOVE: &str = "|";
+const TICK_BELOW: &str = "|";
 
 const COOL: (f64, f64, f64) = (80.0, 150.0, 255.0);
 const NEUTRAL: (f64, f64, f64) = (200.0, 200.0, 200.0);
@@ -84,8 +85,8 @@ const ROW_INDENT: usize = 4 + LABEL_WIDTH;
 /// `cool ` before the first gauge cell.
 const GAUGE_LEAD: usize = 5;
 
-/// `╷ target 81°F 0` with the tick at `col`, directly over (or under) its
-/// marker on the bar. Near the warm end it flips to `target 81°F 0 ╷` so it
+/// `| target 81°F 0` with the tick at `col`, directly over (or under) its
+/// marker on the bar. Near the warm end it flips to `target 81°F 0 |` so it
 /// doesn't run past `end`.
 fn bar_label(
     name: &str,
