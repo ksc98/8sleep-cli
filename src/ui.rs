@@ -178,9 +178,8 @@ pub fn side_block(title: &str, you: bool, s: &Value) -> Vec<String> {
     lines
 }
 
-/// The smart schedule's phases on one line (`now │ night │ dawn`, the
-/// running one marked), then when it next starts and whether Autopilot is
-/// adjusting it.
+/// The smart schedule on one line: `now │ night │ dawn` (the running phase
+/// marked), then when it next starts and whether Autopilot is adjusting it.
 fn phase_rows(s: &Value) -> Vec<String> {
     let mut cells = Vec::new();
     let mut notes = Vec::new();
@@ -213,14 +212,14 @@ fn phase_rows(s: &Value) -> Vec<String> {
         notes.push(format!("starts {next}"));
     }
     if s["autopilot"].as_bool() == Some(true) {
-        notes.push("Autopilot adjusts overnight".to_string());
+        notes.push("Autopilot".to_string());
     }
     let sep = " │ ".dimmed().to_string();
-    let mut out = vec![row("", "schedule", cells.join(&sep))];
+    let mut line = cells.join(&sep);
     if !notes.is_empty() {
-        out.push(row("", "", notes.join(" · ").dimmed()));
+        line.push_str(&format!("   {}", notes.join(" · ").dimmed()));
     }
-    out
+    vec![row("", "schedule", line)]
 }
 
 /// The app's names for the API's `bedTimeLevel`, `initialSleepLevel` and
