@@ -406,14 +406,30 @@ fn day_names(days: &Value) -> Value {
 /// back as the whole list with `PUT /bedtime {"schedules": [...]}`; an entry
 /// without an `id` is a new one. Phase levels come from `GET /temperature`.
 fn schedule_cmd(api: &Api, user: &str, edit: Option<ScheduleEdit>, as_json: bool) -> Result<()> {
-    // Sorted by time of day so `-n` numbers stay put.
-    let read = || -> Result<Vec<Value>> {
-        let v = api.get(&format!("{APP_API}/users/{user}/temperature/pod"))?;
+    // Autopilot doesn't change here, so it's fetched alongside everything else.
+    std::thread::scope(|sc| {
+        let autopilot = sc.spawn(|| api.get(&format!("{APP_API}/users/{user}/autopilotDetails")));
+        schedule_edit_show(api, user, edit, as_json, autopilot)
+    })
+}
+
+fn schedule_edit_show(
+    api: &Api,
+    user: &str,
+    edit: Option<ScheduleEdit>,
+    as_json: bool,
+    autopilot: std::thread::ScopedJoinHandle<'_, Result<Value>>,
+) -> Result<()> {
+    // `temperature/pod` carries the bedtimes and, in `devices[0]`, the same
+    // levels and state as `/temperature`, so one read covers the whole view.
+    // Bedtimes are sorted by time of day so `-n` numbers stay put.
+    let read = || -> Result<(Vec<Value>, Value)> {
+        let mut v = api.get(&format!("{APP_API}/users/{user}/temperature/pod"))?;
         let mut list = v["schedules"].as_array().cloned().unwrap_or_default();
         list.sort_by(|a, b| a["time"].as_str().cmp(&b["time"].as_str()));
-        Ok(list)
+        Ok((list, v["devices"][0].take()))
     };
-    let mut schedules = read()?;
+    let (mut schedules, mut t) = read()?;
     let pick = |n: Option<usize>, len: usize| -> Result<usize> {
         match (n, len) {
             (Some(n), len) if (1..=len).contains(&n) => Ok(n - 1),
@@ -485,7 +501,7 @@ fn schedule_cmd(api: &Api, user: &str, edit: Option<ScheduleEdit>, as_json: bool
             json!({ "schedules": schedules }),
         )?;
         done = Some(msg);
-        schedules = read()?;
+        (schedules, t) = read()?;
     }
     let shown: Vec<Value> = schedules
         .iter()
@@ -495,18 +511,8 @@ fn schedule_cmd(api: &Api, user: &str, edit: Option<ScheduleEdit>, as_json: bool
             b
         })
         .collect();
-    let (t, autopilot) = std::thread::scope(|sc| {
-        let ap = sc.spawn(|| api.get(&format!("{APP_API}/users/{user}/autopilotDetails")));
-        let t = api.get(&format!("{APP_API}/users/{user}/temperature"));
-        (
-            t,
-            ap.join()
-                .unwrap_or_else(|_| bail!("request thread panicked")),
-        )
-    });
-    let t = t?;
     let phases = phases(&t, state_type(&t));
-    let autopilot = autopilot?["isAutopilotActive"].as_bool() == Some(true);
+    let autopilot = join(autopilot)?["isAutopilotActive"].as_bool() == Some(true);
     if as_json {
         let out = json!({ "bedtimes": shown, "phases": phases, "autopilot": autopilot });
         println!("{}", serde_json::to_string_pretty(&out)?);
