@@ -257,7 +257,7 @@ fn eta(secs: i64) -> String {
     }
 }
 
-/// `now 55°F -10 (schedule 0) │ night 78°F -1 │ dawn 82°F 0`: each phase's
+/// `now 55°F -10 (0) │ night 78°F -1 │ dawn 82°F 0`: each phase's
 /// level, with the saved one in parentheses when it was set by hand.
 fn phase_cells(phases: &Value) -> String {
     let mut cells = Vec::new();
@@ -278,7 +278,7 @@ fn phase_cells(phases: &Value) -> String {
         if p["overridden"].as_bool() == Some(true)
             && let Some(sched) = p["scheduled"].as_i64()
         {
-            let saved = format!("(schedule {})", temp::raw_to_app(sched as i32));
+            let saved = format!("({})", temp::raw_to_app(sched as i32));
             cell.push_str(&format!(" {}", saved.dimmed().italic()));
         }
         cells.push(cell);
