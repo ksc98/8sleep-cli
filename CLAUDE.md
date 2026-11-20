@@ -10,9 +10,10 @@ Rust CLI for the Eight Sleep Pod. Package `eightsleep`, binary `8sleep`
 
 ## Code map
 
-- `src/main.rs`: clap commands, side → user resolution, status rendering.
+- `src/main.rs`: clap (derive) commands, no subcommand = `status`, side → user resolution, status rendering.
 - `src/api.rs`: blocking HTTP client for `client-api.8slp.net` and `app-api.8slp.net`, retries once on 401 after a forced token refresh.
 - `src/auth.rs`: password and refresh grants, 1Password lookup, atomic 0600 token cache.
+- `src/ui.rs`: colored rendering (owo-colors, printed via `anstream` so color drops when piped or under `NO_COLOR`), cool→warm gauge, clap help styles.
 - `src/temp.rs`: raw level ↔ °F table and ↔ app scale, temperature arg parsing.
 
 ## API notes

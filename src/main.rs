@@ -1,15 +1,32 @@
 mod api;
 mod auth;
 mod temp;
+mod ui;
 
+use anstream::{eprintln, println};
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand, ValueEnum};
 use serde_json::{Value, json};
 
 use api::{APP_API, Api, CLIENT_API};
 
+const EXAMPLES: &str = "\
+\x1b[1;92mExamples:\x1b[0m
+  8sleep                  show status
+  8sleep temp 68          set the target to 68°F
+  8sleep temp -3          set the target on the app's -10..+10 scale
+  8sleep off
+  8sleep away on
+  8sleep status --json";
+
 #[derive(Parser)]
-#[command(name = "8sleep", version, about = "Control an Eight Sleep Pod")]
+#[command(
+    name = "8sleep",
+    version,
+    about = "Control an Eight Sleep Pod",
+    styles = ui::HELP_STYLES,
+    after_help = EXAMPLES,
+)]
 struct Cli {
     /// Bed side to act on. Defaults to your own side.
     #[arg(long, global = true, value_enum)]
@@ -17,8 +34,9 @@ struct Cli {
     /// Print JSON instead of text.
     #[arg(long, global = true)]
     json: bool,
+    /// Defaults to `status`.
     #[command(subcommand)]
-    cmd: Cmd,
+    cmd: Option<Cmd>,
 }
 
 #[derive(Subcommand)]
@@ -73,24 +91,24 @@ enum Toggle {
 
 fn main() {
     if let Err(e) = run(Cli::parse()) {
-        eprintln!("8sleep: {e:#}");
+        eprintln!("{}", ui::error(&format!("{e:#}")));
         std::process::exit(1);
     }
 }
 
 fn run(cli: Cli) -> Result<()> {
     let mut api = Api::new()?;
-    match cli.cmd {
+    match cli.cmd.unwrap_or(Cmd::Status) {
         Cmd::Status => status(&mut api, cli.json),
         Cmd::On => {
             let user = target_user(&mut api, cli.side)?;
             set_state(&mut api, &user, "smart")?;
-            print_side(&mut api, &user, cli.json)
+            print_side(&mut api, &user, cli.json, "turned on")
         }
         Cmd::Off => {
             let user = target_user(&mut api, cli.side)?;
             set_state(&mut api, &user, "off")?;
-            print_side(&mut api, &user, cli.json)
+            print_side(&mut api, &user, cli.json, "turned off")
         }
         Cmd::Temp { value } => {
             let user = target_user(&mut api, cli.side)?;
@@ -102,7 +120,12 @@ fn run(cli: Cli) -> Result<()> {
             // In smart mode this overrides the current phase's level
             // (overrideLevels.<phase>); `on` after `off` drops the override.
             api.put(&url, json!({ "currentLevel": value }))?;
-            print_side(&mut api, &user, cli.json)
+            let msg = format!(
+                "target set to {}°F ({})",
+                temp::raw_to_f(value),
+                temp::raw_to_app(value)
+            );
+            print_side(&mut api, &user, cli.json, &msg)
         }
         Cmd::Away { state } => {
             let user = target_user(&mut api, cli.side)?;
@@ -119,7 +142,11 @@ fn run(cli: Cli) -> Result<()> {
                 &format!("{APP_API}/users/{user}/away-mode"),
                 json!({ "awayPeriod": { key: ts } }),
             )?;
-            print_side(&mut api, &user, cli.json)
+            let msg = match state {
+                Toggle::On => "away mode on",
+                Toggle::Off => "away mode off",
+            };
+            print_side(&mut api, &user, cli.json, msg)
         }
         Cmd::Prime => {
             let me = me(&mut api)?;
@@ -131,7 +158,7 @@ fn run(cli: Cli) -> Result<()> {
             if cli.json {
                 println!("{}", json!({ "priming": true }));
             } else {
-                println!("priming started");
+                println!("{}", ui::ok("priming started"));
             }
             Ok(())
         }
@@ -151,7 +178,7 @@ fn run(cli: Cli) -> Result<()> {
             if cli.json {
                 println!("{}", json!({ "side": side }));
             } else {
-                println!("{side}");
+                println!("{}", ui::side_title(&side));
             }
             Ok(())
         }
@@ -231,53 +258,19 @@ fn side_info(api: &mut Api, user: &str) -> Result<Value> {
     }))
 }
 
-fn fmt_level(raw: &Value) -> String {
-    match raw.as_i64() {
-        Some(r) => format!(
-            "{}°F ({})",
-            temp::raw_to_f(r as i32),
-            temp::raw_to_app(r as i32)
-        ),
-        None => "?".into(),
-    }
-}
-
-fn side_line(label: &str, s: &Value) -> String {
-    let power = if s["on"].as_bool() == Some(true) {
-        "on "
-    } else {
-        "off"
-    };
-    let away = if s["away"].as_bool() == Some(true) {
-        "  AWAY"
-    } else {
-        ""
-    };
-    format!(
-        "{label:<6} {power}  {} → {}  [{}]{away}",
-        fmt_level(&s["level"]),
-        fmt_level(&s["target"]),
-        s["state"].as_str().unwrap_or("?"),
-    )
-}
-
-fn print_side(api: &mut Api, user: &str, as_json: bool) -> Result<()> {
+/// Confirm a change, then show the side as it is now.
+fn print_side(api: &mut Api, user: &str, as_json: bool, done: &str) -> Result<()> {
     let s = side_info(api, user)?;
     if as_json {
         println!("{}", serde_json::to_string_pretty(&s)?);
-    } else {
-        println!("{}", side_line("", &s).trim_start());
+        return Ok(());
+    }
+    let me = me(api)?;
+    println!("{}\n", ui::ok(done));
+    for line in ui::side_block(ui::side_title(&me.side), false, &s) {
+        println!("{line}");
     }
     Ok(())
-}
-
-fn local_time(ts: Option<&str>, fmt: &str) -> Option<String> {
-    let t: jiff::Timestamp = ts?.parse().ok()?;
-    Some(
-        t.to_zoned(jiff::tz::TimeZone::system())
-            .strftime(fmt)
-            .to_string(),
-    )
 }
 
 fn status(api: &mut Api, as_json: bool) -> Result<()> {
@@ -323,35 +316,14 @@ fn status(api: &mut Api, as_json: bool) -> Result<()> {
         return Ok(());
     }
 
-    let online = if dev["online"].as_bool() == Some(true) {
-        "online"
-    } else {
-        "OFFLINE"
-    };
-    let primed = local_time(dev["lastPrime"].as_str(), "%b %-d %-I:%M %p")
-        .map(|t| format!(" (primed {t})"))
-        .unwrap_or_default();
-    println!(
-        "{} · {online} · {water}{primed}",
-        dev["modelString"].as_str().unwrap_or("Pod")
-    );
+    println!("{}", ui::device_line(&dev, water));
     for s in &sides {
-        let mut label = s["side"].as_str().unwrap_or("?").to_owned();
-        if s["you"].as_bool() == Some(true) && label != "solo" {
-            label.push('*');
+        let side = s["side"].as_str().unwrap_or("?");
+        let you = side != "solo" && s["you"].as_bool() == Some(true);
+        println!();
+        for line in ui::side_block(ui::side_title(side), you, s) {
+            println!("{line}");
         }
-        if s["state"] == "unassigned" {
-            println!("{label:<6} unassigned");
-            continue;
-        }
-        println!("{}", side_line(&label, s));
-    }
-    if let Some(next) = sides
-        .iter()
-        .find(|s| s["you"].as_bool() == Some(true))
-        .and_then(|s| local_time(s["next_bedtime"].as_str(), "%a %-I:%M %p"))
-    {
-        println!("next bedtime {next}");
     }
     Ok(())
 }

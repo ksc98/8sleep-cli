@@ -3,7 +3,8 @@
 Command-line control for an Eight Sleep Pod.
 
 ```
-8sleep status                  # power, level → target, away, water, next bedtime
+8sleep                         # same as `8sleep status`
+8sleep status                  # power, target and current level, away, water, next bedtime
 8sleep on | off
 8sleep temp 68                 # °F (55-111)
 8sleep temp -3                 # app scale (-10..+10)
@@ -13,7 +14,8 @@ Command-line control for an Eight Sleep Pod.
 ```
 
 `--side left|right|solo` targets whoever is assigned to that side. Without it,
-commands act on your own account. `--json` prints JSON.
+commands act on your own account. `--json` prints JSON. Color is off when
+output is piped or `NO_COLOR` is set.
 
 ## Install
 
