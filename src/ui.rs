@@ -216,14 +216,15 @@ fn phase_rows(s: &Value) -> Vec<String> {
     vec![row("", "schedule", cells)]
 }
 
-/// `bedtime  2:15 AM daily · cools in 8h 30m`. The verb compares the
+/// `bedtime  2:15 AM · daily · cools in 8h 30m`. The verb compares the
 /// schedule's `now` level with the bed's current level: that's where the bed
 /// heads when the bedtime starts.
 fn bedtime_row(s: &Value) -> Option<String> {
     let time = s["bedtime"]["time"].as_str()?;
     let mut line = format!(
-        "{} {}",
+        "{}{}{}",
         alarm::clock(time).bold(),
+        " · ".dimmed(),
         days_summary(&s["bedtime"]["days"])
     );
     let next: Option<jiff::Timestamp> = s["next_bedtime"].as_str().and_then(|t| t.parse().ok());
