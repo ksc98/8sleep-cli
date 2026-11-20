@@ -214,7 +214,7 @@ fn phase_rows(s: &Value) -> Vec<String> {
         return Vec::new();
     }
     if s["autopilot"].as_bool() == Some(true) {
-        notes.push("Autopilot".to_string());
+        notes.push("Autopilot on".to_string());
     }
     vec![row("", "schedule", with_notes(cells, &notes))]
 }
@@ -260,8 +260,8 @@ fn eta(secs: i64) -> String {
     }
 }
 
-/// `now 81°F 0 │ night 78°F -1 │ dawn 82°F 0`, plus notes for phases changed
-/// for tonight.
+/// `now 81°F 0 │ night 78°F -1 │ dawn 82°F 0`, plus a note for each phase
+/// running at a hand-set level instead of its scheduled one.
 fn phase_cells(phases: &Value) -> (String, Vec<String>) {
     let mut cells = Vec::new();
     let mut notes = Vec::new();
@@ -282,7 +282,8 @@ fn phase_cells(phases: &Value) -> (String, Vec<String>) {
             && let Some(sched) = p["scheduled"].as_i64()
         {
             notes.push(format!(
-                "{name} changed tonight (schedule {})",
+                "{name} {} set by hand, schedule says {}",
+                temp::raw_to_app(level),
                 temp::raw_to_app(sched as i32)
             ));
         }
