@@ -93,7 +93,11 @@ impl Api {
             }
             let text = resp.text()?;
             if !status.is_success() {
-                bail!("{} ({status}, {method} {url})", server_message(&text));
+                let msg = server_message(&text);
+                if msg.is_empty() {
+                    bail!("{status} ({method} {url})");
+                }
+                bail!("{msg} ({status}, {method} {url})");
             }
             if text.trim().is_empty() {
                 return Ok(Value::Null);

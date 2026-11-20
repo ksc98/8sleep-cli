@@ -1,6 +1,7 @@
 mod alarm;
 mod api;
 mod auth;
+mod config;
 mod temp;
 mod ui;
 
@@ -290,7 +291,7 @@ fn run(cli: Cli) -> Result<()> {
             })
         }
         Cmd::Prime => {
-            let device_id = device_id(&api, false)?;
+            let device_id = device_id(&api)?;
             let uid = api.user_id().to_owned();
             api.post(
                 &format!("{APP_API}/devices/{device_id}/priming/tasks"),
@@ -654,44 +655,31 @@ fn print_alarms(list: &[Value], as_json: bool, done: Option<&str>) -> Result<()>
     Ok(())
 }
 
-/// The account's device id. It only changes if the pod is replaced, so it's
-/// cached in `~/.cache/8sleep/device.json` (keyed by user) and `users/me` is
-/// read only when the cache is missing or `refresh` is set.
-fn device_id(api: &Api, refresh: bool) -> Result<String> {
-    let path = auth::cache_path("device.json")?;
-    if !refresh
-        && let Ok(raw) = std::fs::read(&path)
-        && let Ok(c) = serde_json::from_slice::<Value>(&raw)
-        && c["user_id"] == api.user_id()
-        && let Some(id) = c["device_id"].as_str()
-    {
-        return Ok(id.to_owned());
+/// The Pod's device id, from `device_id` in the config file. It only changes
+/// if the pod is replaced; when it's missing, `users/me` supplies it and it's
+/// written to the config.
+fn device_id(api: &Api) -> Result<String> {
+    if let Some(id) = config::get("device_id")? {
+        return Ok(id);
     }
     let v = api.get(&format!("{CLIENT_API}/users/me"))?;
     let id = v["user"]["currentDevice"]["id"]
         .as_str()
         .context("account has no current device")?
         .to_owned();
-    let cache = json!({ "user_id": api.user_id(), "device_id": id });
-    auth::write_private(&path, &serde_json::to_vec(&cache)?)?;
+    config::set("device_id", &id)?;
     Ok(id)
 }
 
-/// The account's device. If the read fails, the cached id may be stale (a
-/// replaced pod), so the id is looked up again and the read retried once
-/// when it changed.
 fn device(api: &Api) -> Result<Value> {
-    let id = device_id(api, false)?;
-    let read = |id: &str| -> Result<Value> {
-        Ok(api.get(&format!("{CLIENT_API}/devices/{id}"))?["result"].take())
-    };
-    match read(&id) {
-        Ok(dev) => Ok(dev),
-        Err(e) => match device_id(api, true) {
-            Ok(fresh) if fresh != id => read(&fresh),
-            _ => Err(e),
-        },
-    }
+    let id = device_id(api)?;
+    let dev = api
+        .get(&format!("{CLIENT_API}/devices/{id}"))
+        .with_context(|| {
+            let path = config::path().map_or("the config file".into(), |p| p.display().to_string());
+            format!("reading device {id} (if the pod was replaced, remove device_id from {path})")
+        })?;
+    Ok(dev["result"].clone())
 }
 
 /// Which side `user` is on: `solo` when the same user has both sides.
@@ -871,7 +859,7 @@ fn join<T>(h: std::thread::ScopedJoinHandle<'_, Result<T>>) -> Result<T> {
 
 /// Everything `status` shows, as JSON and as rendered lines.
 ///
-/// One round of concurrent reads: the device (through the cached id) and
+/// One round of concurrent reads: the device (its id from the config) and
 /// your own side. Only a bed shared with someone else needs a second round
 /// for their side.
 fn status_snapshot(api: &Api) -> Result<(Value, Vec<String>)> {

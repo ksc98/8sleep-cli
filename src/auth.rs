@@ -44,7 +44,7 @@ fn now() -> u64 {
 }
 
 /// `~/.cache/8sleep/<name>`.
-pub fn cache_path(name: &str) -> Result<PathBuf> {
+fn cache_path(name: &str) -> Result<PathBuf> {
     let dir = dirs::cache_dir().context("no cache directory")?;
     Ok(dir.join("8sleep").join(name))
 }
@@ -58,7 +58,7 @@ fn save_cache(tok: &Token) -> Result<()> {
     write_private(&cache_path("token.json")?, &serde_json::to_vec(tok)?)
 }
 
-/// Write a cache file atomically with 0600 permissions.
+/// Write a file atomically with 0600 permissions.
 pub fn write_private(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
     let dir = path.parent().context("cache path has no parent")?;
     fs::create_dir_all(dir)?;

@@ -49,6 +49,17 @@ Google or Apple need a password set in the app first.
 Tokens are cached in `~/.cache/8sleep/token.json` (mode 0600) and refreshed
 with the refresh token, so 1Password is only asked again if a refresh fails.
 
+## Config
+
+`~/.config/8sleep/config.toml` holds your Pod's device id:
+
+```toml
+device_id = "793e54a45af630d3b52cb74198022129f2ba4fea"
+```
+
+The first run looks it up and writes it, so later commands skip that request.
+If the pod is ever replaced, delete the line and it's looked up again.
+
 ## Temperature
 
 The API stores a raw level from -100 to 100. The CLI shows it as -10..+10
