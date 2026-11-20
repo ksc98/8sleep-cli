@@ -256,14 +256,14 @@ pub fn side_block(title: Option<&str>, you: bool, s: &Value) -> Vec<String> {
     if s["away"].as_bool() == Some(true) {
         lines.push(row("", "away", "on".yellow().bold()));
     }
-    lines.extend(history_rows(&s["history"]));
+    lines.extend(event_rows(&s["events"]));
     lines
 }
 
-/// The latest changes, oldest first, one per row: `history  1:25 AM
+/// The latest changes, oldest first, one per row: `events   1:25 AM
 /// bedtime 1:40 AM → 2:30 AM`, the times dimmed and right-aligned.
-fn history_rows(history: &Value) -> Vec<String> {
-    let Some(list) = history.as_array() else {
+fn event_rows(events: &Value) -> Vec<String> {
+    let Some(list) = events.as_array() else {
         return Vec::new();
     };
     list.iter()
@@ -279,7 +279,7 @@ fn history_rows(history: &Value) -> Vec<String> {
                 })
                 .unwrap_or_default();
             let text = c["text"].as_str().unwrap_or("?");
-            let label = if i == 0 { "history" } else { "" };
+            let label = if i == 0 { "events" } else { "" };
             row(
                 "",
                 label,

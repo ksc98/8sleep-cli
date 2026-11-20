@@ -2,7 +2,7 @@ mod alarm;
 mod api;
 mod auth;
 mod config;
-mod history;
+mod events;
 mod temp;
 mod ui;
 
@@ -727,10 +727,10 @@ fn state_type(temp: &Value) -> &str {
     temp["currentState"]["type"].as_str().unwrap_or("unknown")
 }
 
-/// One user's side as `status` shows it, with its recent history.
+/// One user's side as `status` shows it, with its recent events.
 fn side_info(api: &Api, user: &str) -> Result<Value> {
     let (s, log) = std::thread::scope(|sc| {
-        let log = sc.spawn(|| api.get(&history::url(user)));
+        let log = sc.spawn(|| api.get(&events::url(user)));
         let s = side_with(api, user, || {
             api.get(&format!("{APP_API}/users/{user}/temperature"))
         });
@@ -738,8 +738,8 @@ fn side_info(api: &Api, user: &str) -> Result<Value> {
     });
     let mut s = s?;
     // The change log is extra: if it fails, status shows the rest.
-    s["history"] = match log {
-        Ok(log) => json!(history::list(&log, &s)),
+    s["events"] = match log {
+        Ok(log) => json!(events::list(&log, &s)),
         Err(_) => Value::Null,
     };
     Ok(s)
