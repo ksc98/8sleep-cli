@@ -216,9 +216,13 @@ fn phase_rows(s: &Value) -> Vec<String> {
     vec![row("", "schedule", cells)]
 }
 
-/// `bedtime  1:45 AM · daily · cools in 7h 45m`. The verb compares the
-/// schedule's `now` level with the bed's current level: that's where the bed
-/// heads when the bedtime starts.
+/// How long before bedtime the app turns the pod on ("Pod turns on: 1h
+/// before bedtime"). The API only stores the bedtime.
+const POD_ON_LEAD_HOURS: i64 = 1;
+
+/// `bedtime  1:45 AM · daily · cools at 12:45 AM · 6h 40m`. The verb
+/// compares the schedule's `now` level with the bed's current level: that's
+/// where the bed heads when the pod turns on.
 fn bedtime_row(s: &Value) -> Option<String> {
     let time = alarm::clock(s["bedtime"]["time"].as_str()?);
     let start = s["phases"][0]["scheduled"].as_i64();
@@ -236,13 +240,18 @@ fn bedtime_row(s: &Value) -> Option<String> {
     );
     let next: Option<jiff::Timestamp> = s["next_bedtime"].as_str().and_then(|t| t.parse().ok());
     if let Some(next) = next {
-        // The API reports one time for the schedule: the bed starts heading to
-        // the `now` level at bedtime itself.
-        let secs = (next - jiff::Timestamp::now()).get_seconds();
-        line.push_str(&format!(
-            "{sep}{}",
-            format!("{verb} in {}", eta(secs)).dimmed()
-        ));
+        let on_at = next - jiff::SignedDuration::from_hours(POD_ON_LEAD_HOURS);
+        let now = jiff::Timestamp::now();
+        let clock = on_at
+            .to_zoned(jiff::tz::TimeZone::system())
+            .strftime("%-I:%M %p")
+            .to_string();
+        let tail = if on_at <= now {
+            format!("{verb} now, since {clock}")
+        } else {
+            format!("{verb} at {clock}{sep}{}", eta((on_at - now).get_seconds()))
+        };
+        line.push_str(&format!("{sep}{}", tail.dimmed()));
     }
     Some(row("", "bedtime", line))
 }
