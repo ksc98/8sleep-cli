@@ -183,6 +183,9 @@ pub fn side_block(title: &str, you: bool, s: &Value) -> Vec<String> {
         lines.push(row("", "", gauge(t, now, on)));
     }
     lines.extend(phase_rows(s));
+    if let Some(bedtime) = bedtime_row(s) {
+        lines.push(bedtime);
+    }
     if let Some(alarm) = alarm_row(&s["alarm"]) {
         lines.push(alarm);
     }
@@ -199,17 +202,51 @@ fn phase_rows(s: &Value) -> Vec<String> {
     if cells.is_empty() {
         return Vec::new();
     }
-    if let Some(time) = s["bedtime"]["time"].as_str() {
-        notes.push(format!(
-            "bedtime {} {}",
-            alarm::clock(time),
-            days_summary(&s["bedtime"]["days"])
-        ));
-    }
     if s["autopilot"].as_bool() == Some(true) {
         notes.push("Autopilot".to_string());
     }
     vec![row("", "schedule", with_notes(cells, &notes))]
+}
+
+/// `bedtime  2:15 AM daily · cools in 8h 30m`. The verb compares the
+/// schedule's `now` level with the bed's current level: that's where the bed
+/// heads when the bedtime starts.
+fn bedtime_row(s: &Value) -> Option<String> {
+    let time = s["bedtime"]["time"].as_str()?;
+    let mut line = format!(
+        "{} {}",
+        alarm::clock(time).bold(),
+        days_summary(&s["bedtime"]["days"])
+    );
+    let next: Option<jiff::Timestamp> = s["next_bedtime"].as_str().and_then(|t| t.parse().ok());
+    if let Some(next) = next {
+        let start = s["phases"][0]["scheduled"].as_i64();
+        let current = s["level"].as_i64();
+        let verb = match (start, current) {
+            (Some(a), Some(b)) if a < b => "cools",
+            (Some(a), Some(b)) if a > b => "warms",
+            _ => "starts",
+        };
+        let secs = (next - jiff::Timestamp::now()).get_seconds();
+        line.push_str(&format!(
+            "{}{}",
+            " · ".dimmed(),
+            format!("{verb} in {}", eta(secs)).dimmed()
+        ));
+    }
+    Some(row("", "bedtime", line))
+}
+
+/// `8h 30m`, `45m`, `2d 3h`, `<1m`.
+fn eta(secs: i64) -> String {
+    let m = secs.max(0) / 60;
+    let (d, h, m) = (m / 1440, (m / 60) % 24, m % 60);
+    match (d, h, m) {
+        (0, 0, 0) => "<1m".into(),
+        (0, 0, m) => format!("{m}m"),
+        (0, h, m) => format!("{h}h {m}m"),
+        (d, h, _) => format!("{d}d {h}h"),
+    }
 }
 
 /// `now 81°F 0 │ night 78°F -1 │ dawn 82°F 0`, plus notes for phases changed
@@ -418,4 +455,18 @@ pub fn ok(msg: &str) -> String {
 
 pub fn error(msg: &str) -> String {
     format!("{} {msg}", "error:".red().bold())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::eta;
+
+    #[test]
+    fn formats_eta() {
+        assert_eq!(eta(30), "<1m");
+        assert_eq!(eta(45 * 60), "45m");
+        assert_eq!(eta(8 * 3600 + 30 * 60 + 59), "8h 30m");
+        assert_eq!(eta(2 * 86400 + 3 * 3600 + 120), "2d 3h");
+        assert_eq!(eta(-5), "<1m");
+    }
 }
