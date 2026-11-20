@@ -31,6 +31,18 @@ pub const WEEKDAYS: [&str; 7] = [
     "sunday",
 ];
 
+/// The schedule API's list of day names as a `weekDays`-style map.
+pub fn days_map(list: &Value) -> Value {
+    WEEKDAYS
+        .iter()
+        .map(|d| {
+            let on = list.as_array().is_some_and(|a| a.iter().any(|x| x == d));
+            (d.to_string(), Value::Bool(on))
+        })
+        .collect::<serde_json::Map<_, _>>()
+        .into()
+}
+
 /// `weekdays`, `weekends`, `daily`, or a comma list like `mon,wed,fri`, as
 /// the API's `weekDays` map.
 pub fn parse_days(input: &str) -> Result<Value, String> {

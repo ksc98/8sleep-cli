@@ -256,7 +256,37 @@ pub fn side_block(title: Option<&str>, you: bool, s: &Value) -> Vec<String> {
     if s["away"].as_bool() == Some(true) {
         lines.push(row("", "away", "on".yellow().bold()));
     }
+    lines.extend(change_rows(&s["changes"]));
     lines
+}
+
+/// The latest changes, oldest first, one per row: `changes  1:25 AM
+/// bedtime 1:40 AM → 2:30 AM`, the times dimmed and right-aligned.
+fn change_rows(changes: &Value) -> Vec<String> {
+    let Some(list) = changes.as_array() else {
+        return Vec::new();
+    };
+    list.iter()
+        .enumerate()
+        .map(|(i, c)| {
+            let time = c["time"]
+                .as_str()
+                .and_then(|t| t.parse::<jiff::Timestamp>().ok())
+                .map(|t| {
+                    t.to_zoned(jiff::tz::TimeZone::system())
+                        .strftime("%-I:%M %p")
+                        .to_string()
+                })
+                .unwrap_or_default();
+            let text = c["text"].as_str().unwrap_or("?");
+            let label = if i == 0 { "changes" } else { "" };
+            row(
+                "",
+                label,
+                format!("{}  {text}", format!("{time:>8}").dimmed()),
+            )
+        })
+        .collect()
 }
 
 /// The smart schedule on one line: `now │ night │ dawn` (the running phase
@@ -391,7 +421,7 @@ pub fn schedule_block(bedtimes: &[Value], phases: &Value, autopilot: bool) -> Ve
 
 /// The app's names for the API's `bedTimeLevel`, `initialSleepLevel` and
 /// `finalSleepLevel`.
-fn phase_name(phase: &str) -> &str {
+pub fn phase_name(phase: &str) -> &str {
     match phase {
         "bedtime" => "now",
         "initial" => "night",

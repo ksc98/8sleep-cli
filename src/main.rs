@@ -1,6 +1,7 @@
 mod alarm;
 mod api;
 mod auth;
+mod changes;
 mod config;
 mod temp;
 mod ui;
@@ -726,11 +727,22 @@ fn state_type(temp: &Value) -> &str {
     temp["currentState"]["type"].as_str().unwrap_or("unknown")
 }
 
-/// One user's side as `status` shows it.
+/// One user's side as `status` shows it, with its recent changes.
 fn side_info(api: &Api, user: &str) -> Result<Value> {
-    side_with(api, user, || {
-        api.get(&format!("{APP_API}/users/{user}/temperature"))
-    })
+    let (s, log) = std::thread::scope(|sc| {
+        let log = sc.spawn(|| api.get(&changes::url(user)));
+        let s = side_with(api, user, || {
+            api.get(&format!("{APP_API}/users/{user}/temperature"))
+        });
+        (s, join(log))
+    });
+    let mut s = s?;
+    // The change log is extra: if it fails, status shows the rest.
+    s["changes"] = match log {
+        Ok(log) => json!(changes::list(&log, &s)),
+        Err(_) => Value::Null,
+    };
+    Ok(s)
 }
 
 /// One user's side, with `temperature` supplying the temperature object:
@@ -760,6 +772,10 @@ fn side_with(api: &Api, user: &str, temperature: impl FnOnce() -> Result<Value>)
         "target": target,
         "target_f": target.map(temp::raw_to_f),
         "away": away["isAway"].as_bool(),
+        // When the bed last turned on and when the running phase began.
+        // Moving the bedtime mid-session restarts the phase in place.
+        "since": (state != "off").then(|| t["currentState"]["instance"]["timestamp"].as_str()).flatten(),
+        "phase_since": (state != "off").then(|| t["currentState"]["started"].as_str()).flatten(),
         "next_bedtime": t["nextSchedule"]["nextTimestamp"].as_str(),
         "bedtime": bedtime(&t["nextSchedule"]),
         "autopilot": autopilot["isAutopilotActive"].as_bool(),
@@ -778,16 +794,7 @@ fn bedtime(sched: &Value) -> Value {
 }
 
 fn bedtime_days(sched: &Value) -> Value {
-    let days: serde_json::Map<String, Value> = alarm::WEEKDAYS
-        .iter()
-        .map(|d| {
-            let on = sched["days"]
-                .as_array()
-                .is_some_and(|a| a.iter().any(|x| x == d));
-            (d.to_string(), Value::Bool(on))
-        })
-        .collect();
-    json!({ "time": sched["time"], "days": days })
+    json!({ "time": sched["time"], "days": alarm::days_map(&sched["days"]) })
 }
 
 /// The smart schedule's three phases, in order: (state suffix and
