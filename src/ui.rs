@@ -23,6 +23,8 @@ const TARGET_MARK: &str = "◆";
 /// Nerd Font `cod-circle_filled`: the same size as `TARGET_MARK` on the bar,
 /// where `●` draws noticeably bigger than `◆`.
 const NOW_MARK: &str = "\u{ea71}";
+/// Nerd Font `md-chevron_up`, pointing from the current value up to its dot.
+const NOW_POINTER: &str = "\u{f0143}";
 
 const COOL: (f64, f64, f64) = (80.0, 150.0, 255.0);
 const NEUTRAL: (f64, f64, f64) = (200.0, 200.0, 200.0);
@@ -82,14 +84,16 @@ const ROW_INDENT: usize = 4 + LABEL_WIDTH;
 /// `cool ` before the first gauge cell.
 const GAUGE_LEAD: usize = 5;
 
-/// `81°F 0` centered on its marker's column `col` (over the bar for the
-/// target, under it for the current level), kept between `start` and `end`.
-/// `precise` keeps a decimal on the app scale (the current level drifts
-/// between steps); `bold` marks the target.
+/// A level's `81°F 0` placed at its marker's column `col`, kept between
+/// `start` and `end`. Without a `pointer` it's centered on the column (the
+/// target, over the bar). With one, the pointer sits on the column and the
+/// value follows it, or leads it near the warm end (`74°F -3.1 ^`). `precise`
+/// keeps a decimal on the app scale; `bold` marks the target.
 fn marker_value(
     raw: i32,
     precise: bool,
     bold: bool,
+    pointer: Option<&str>,
     col: usize,
     start: usize,
     end: usize,
@@ -101,15 +105,27 @@ fn marker_value(
         temp::raw_to_app(raw)
     };
     let width = f.chars().count() + 1 + app.chars().count();
-    let left = (col + 1)
-        .saturating_sub(width.div_ceil(2))
-        .clamp(start, end.saturating_sub(width).max(start));
     let fc = if bold {
         colored_level(&f, raw).bold().to_string()
     } else {
         colored_level(&f, raw)
     };
-    format!("{}{fc} {}", " ".repeat(left), app.dimmed())
+    let value = format!("{fc} {}", app.dimmed());
+    let Some(pointer) = pointer else {
+        let left = (col + 1)
+            .saturating_sub(width.div_ceil(2))
+            .clamp(start, end.saturating_sub(width).max(start));
+        return format!("{}{value}", " ".repeat(left));
+    };
+    let pointer = pointer.dimmed();
+    if col + 2 + width <= end {
+        format!("{}{pointer} {value}", " ".repeat(col))
+    } else {
+        format!(
+            "{}{value} {pointer}",
+            " ".repeat((col + 1).saturating_sub(width + 2))
+        )
+    }
 }
 
 /// `  ◆ target   81°F`: an optional bar marker, a dimmed label, the value.
@@ -203,15 +219,23 @@ pub fn side_block(title: Option<&str>, you: bool, s: &Value) -> Vec<String> {
     // The API keeps reporting the current level while the bed is off.
     let now = s["level"].as_i64().map(|v| v as i32);
     if let Some(t) = target {
-        // Each value sits centered on its marker: the target's above the
-        // bar, the current level's below.
+        // The target's value sits centered over the diamond; the current
+        // level's sits below the bar behind a pointer up at its dot.
         let cell0 = ROW_INDENT + GAUGE_LEAD;
         let end = cell0 + GAUGE_CELLS as usize + GAUGE_LEAD;
         let col = |raw| cell0 + gauge_cell(raw) as usize;
-        lines.push(marker_value(t, false, true, col(t), ROW_INDENT, end));
+        lines.push(marker_value(t, false, true, None, col(t), ROW_INDENT, end));
         lines.push(row("", "", gauge(t, now, on)));
         if let Some(n) = now {
-            lines.push(marker_value(n, true, false, col(n), ROW_INDENT, end));
+            lines.push(marker_value(
+                n,
+                true,
+                false,
+                Some(NOW_POINTER),
+                col(n),
+                ROW_INDENT,
+                end,
+            ));
         }
     }
     lines.extend(phase_rows(s));
@@ -500,7 +524,7 @@ pub fn error(msg: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{eta, marker_value};
+    use super::{NOW_POINTER, eta, marker_value};
 
     #[test]
     fn formats_eta() {
@@ -528,16 +552,36 @@ mod tests {
     }
 
     #[test]
+    fn pointer_sits_on_the_marker() {
+        let col_of = |line: String| {
+            String::from_utf8(strip_ansi(line.as_bytes()))
+                .unwrap()
+                .chars()
+                .position(|c| c.to_string() == NOW_POINTER)
+                .unwrap()
+        };
+        // Room to the right: pointer first, on the marker's column.
+        assert_eq!(
+            col_of(marker_value(0, true, false, Some(NOW_POINTER), 30, 13, 70)),
+            30
+        );
+        // Near the warm end the value leads; the pointer stays on the marker.
+        let flipped = marker_value(100, true, false, Some(NOW_POINTER), 65, 13, 70);
+        assert_eq!(col_of(flipped.clone()), 65);
+        assert!(strip_ansi(flipped.as_bytes()).ends_with(NOW_POINTER.as_bytes()));
+    }
+
+    #[test]
     fn value_centers_on_its_marker() {
         // `81°F 0` is 6 wide: its middle (column 2 or 3) sits on the marker.
         let line = String::from_utf8(strip_ansi(
-            marker_value(0, false, true, 30, 13, 70).as_bytes(),
+            marker_value(0, false, true, None, 30, 13, 70).as_bytes(),
         ))
         .unwrap();
         assert_eq!(line.trim_end(), format!("{}81°F 0", " ".repeat(28)));
         // Clamped at the edges.
         let line = String::from_utf8(strip_ansi(
-            marker_value(100, true, false, 69, 13, 70).as_bytes(),
+            marker_value(100, true, false, None, 69, 13, 70).as_bytes(),
         ))
         .unwrap();
         assert!(line.chars().count() <= 70);
