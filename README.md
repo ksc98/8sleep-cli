@@ -12,12 +12,15 @@ Command-line control for an Eight Sleep Pod.
 8sleep alarm                   # list alarms
 8sleep alarm 8:30pm            # set the alarm time (also 7am, 20:30)
 8sleep alarm on | off
+8sleep alarm add 7am [--days weekdays|weekends|daily|mon,wed]
+8sleep alarm rm -n 2
+8sleep alarm test [--for 10s]     # ring a test alarm, then stop and remove it
 8sleep side [solo|left|right]  # show or change your side assignment
 ```
 
 `--side left|right|solo` targets whoever is assigned to that side. Without it,
-commands act on your own account. With several alarms, `alarm -n 2 …`
-picks one by its number in `8sleep alarm`. `--json` prints JSON. Color is off when
+commands act on your own account. With several alarms, `-n 2` picks one by
+its number in `8sleep alarm` (sorted by time of day). `--json` prints JSON. Color is off when
 output is piped or `NO_COLOR` is set.
 
 ## Install

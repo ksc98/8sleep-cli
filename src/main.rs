@@ -62,7 +62,11 @@ enum Cmd {
     /// Start priming the water tank.
     Prime,
     /// List alarms, set an alarm's time (8:30pm, 7am, 20:30), or turn it on/off.
+    #[command(args_conflicts_with_subcommands = true)]
     Alarm {
+        #[command(subcommand)]
+        sub: Option<AlarmCmd>,
+        /// A new time (8:30pm, 7am, 20:30), or on / off.
         #[arg(value_parser = alarm::parse_action)]
         action: Option<alarm::Action>,
         /// Which alarm, by its number in `8sleep alarm`. Needed only when there's more than one.
@@ -73,6 +77,29 @@ enum Cmd {
     Side {
         #[arg(value_enum)]
         side: Option<Side>,
+    },
+}
+
+#[derive(Subcommand)]
+enum AlarmCmd {
+    /// Add an alarm (one-time unless --days is given).
+    Add {
+        #[arg(value_parser = alarm::parse_time)]
+        time: String,
+        /// Repeat on these days: weekdays, weekends, daily, or a list like mon,wed,fri.
+        #[arg(long, value_parser = alarm::parse_days)]
+        days: Option<Value>,
+    },
+    /// Delete an alarm by its number in `8sleep alarm`.
+    Rm {
+        #[arg(short, long)]
+        number: usize,
+    },
+    /// Ring a test alarm now to feel it, then stop and remove it.
+    Test {
+        /// How long to let it ring (e.g. 10s, 1m).
+        #[arg(long = "for", default_value = "10s", value_parser = humantime::parse_duration)]
+        duration: std::time::Duration,
     },
 }
 
@@ -172,9 +199,18 @@ fn run(cli: Cli) -> Result<()> {
             }
             Ok(())
         }
-        Cmd::Alarm { action, number } => {
+        Cmd::Alarm {
+            sub,
+            action,
+            number,
+        } => {
             let user = target_user(&api, cli.side)?;
-            alarm_cmd(&api, &user, action, number, cli.json)
+            match sub {
+                None => alarm_cmd(&api, &user, action, number, cli.json),
+                Some(AlarmCmd::Add { time, days }) => alarm_add(&api, &user, &time, days, cli.json),
+                Some(AlarmCmd::Rm { number }) => alarm_rm(&api, &user, number, cli.json),
+                Some(AlarmCmd::Test { duration }) => alarm_test(&api, &user, duration, cli.json),
+            }
         }
         Cmd::Side { side } => {
             let me = me(&api)?;
@@ -206,9 +242,7 @@ fn alarm_cmd(
     number: Option<usize>,
     as_json: bool,
 ) -> Result<()> {
-    let list_url = format!("{APP_API_V2}/users/{user}/alarms");
-    let alarms = |v: Value| v["alarms"].as_array().cloned().unwrap_or_default();
-    let list = alarms(api.get(&list_url)?);
+    let list = list_alarms(api, user)?;
     let Some(action) = action else {
         return print_alarms(&list, as_json, None);
     };
@@ -237,7 +271,116 @@ fn alarm_cmd(
         }
     }
     api.put(&format!("{APP_API}/users/{user}/alarms/{id}"), body)?;
-    print_alarms(&alarms(api.get(&list_url)?), as_json, Some(&done))
+    print_alarms(&list_alarms(api, user)?, as_json, Some(&done))
+}
+
+/// The user's alarms sorted by time of day, without vibration-test
+/// leftovers. The server's order shifts after edits, so `-n` numbers come
+/// from this sort.
+fn list_alarms(api: &Api, user: &str) -> Result<Vec<Value>> {
+    let v = api.get(&format!("{APP_API_V2}/users/{user}/alarms"))?;
+    let mut list: Vec<Value> = v["alarms"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|a| !alarm::is_test(a))
+        .cloned()
+        .collect();
+    // `HH:MM:SS` sorts correctly as text.
+    list.sort_by(|a, b| a["time"].as_str().cmp(&b["time"].as_str()));
+    Ok(list)
+}
+
+/// New alarms ring and warm the same way as the user's first alarm, or use
+/// the app's defaults when there is none.
+fn alarm_add(api: &Api, user: &str, time: &str, days: Option<Value>, as_json: bool) -> Result<()> {
+    let list = list_alarms(api, user)?;
+    let (vibration, thermal) = match list.first() {
+        Some(a) => (a["vibration"].clone(), a["thermal"].clone()),
+        None => (
+            json!({ "enabled": true, "powerLevel": 50, "pattern": "RISE" }),
+            json!({ "enabled": true, "level": 0 }),
+        ),
+    };
+    let repeat = match &days {
+        Some(d) => json!({ "enabled": true, "weekDays": d }),
+        None => {
+            json!({ "enabled": false, "weekDays": alarm::parse_days("daily").map_err(anyhow::Error::msg)? })
+        }
+    };
+    api.post(
+        &format!("{APP_API}/users/{user}/alarms"),
+        json!({
+            "time": time,
+            "enabled": true,
+            "repeat": repeat,
+            "vibration": vibration,
+            "thermal": thermal,
+        }),
+    )?;
+    let done = format!("added a {} alarm", alarm::clock(time));
+    print_alarms(&list_alarms(api, user)?, as_json, Some(&done))
+}
+
+fn alarm_rm(api: &Api, user: &str, number: usize, as_json: bool) -> Result<()> {
+    let list = list_alarms(api, user)?;
+    let a = list
+        .get(number.wrapping_sub(1))
+        .with_context(|| format!("there is no alarm {number} (you have {})", list.len()))?;
+    let id = a["id"].as_str().context("alarm has no id")?;
+    api.delete(&format!("{APP_API}/users/{user}/alarms/{id}"))?;
+    let done = format!(
+        "deleted the {} alarm",
+        alarm::clock(a["time"].as_str().unwrap_or("?"))
+    );
+    print_alarms(&list_alarms(api, user)?, as_json, Some(&done))
+}
+
+/// `POST /vibration-test` creates and rings a throwaway alarm. Let it ring,
+/// then dismiss and delete it (and any left over from an interrupted run).
+fn alarm_test(api: &Api, user: &str, ring: std::time::Duration, as_json: bool) -> Result<()> {
+    let alarms_url = format!("{APP_API}/users/{user}/alarms");
+    let cleanup = || -> Result<usize> {
+        let v = api.get(&format!("{APP_API_V2}/users/{user}/alarms"))?;
+        let tests: Vec<String> = v["alarms"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|a| alarm::is_test(a))
+            .filter_map(|a| a["id"].as_str().map(str::to_owned))
+            .collect();
+        for id in &tests {
+            // Dismiss stops a ringing test; it errors when nothing rings.
+            let _ = api.put(
+                &format!("{alarms_url}/{id}/dismiss"),
+                json!({ "ignoreDeviceErrors": false }),
+            );
+            api.delete(&format!("{alarms_url}/{id}"))?;
+        }
+        Ok(tests.len())
+    };
+    cleanup()?;
+    api.post(&format!("{APP_API}/users/{user}/vibration-test"), json!({}))?;
+    if !as_json {
+        println!(
+            "{}",
+            ui::ok(&format!(
+                "test alarm ringing for {}",
+                humantime::format_duration(ring)
+            ))
+        );
+    }
+    std::thread::sleep(ring);
+    let removed = cleanup()?;
+    if as_json {
+        println!(
+            "{}",
+            json!({ "rang_secs": ring.as_secs(), "removed": removed })
+        );
+    } else {
+        println!("{}", ui::ok("stopped and removed"));
+    }
+    Ok(())
 }
 
 fn print_alarms(list: &[Value], as_json: bool, done: Option<&str>) -> Result<()> {

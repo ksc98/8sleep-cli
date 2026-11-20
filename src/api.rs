@@ -52,6 +52,10 @@ impl Api {
         self.request(Method::POST, url, Some(body))
     }
 
+    pub fn delete(&self, url: &str) -> Result<Value> {
+        self.request(Method::DELETE, url, None)
+    }
+
     fn token(&self) -> String {
         self.access_token
             .lock()

@@ -12,6 +12,57 @@ pub const SERVER_FIELDS: [&str; 5] = [
     "snoozedUntil",
 ];
 
+/// Tag on the throwaway alarm `POST /vibration-test` creates.
+pub const TEST_TAG: &str = "oneOff-vibrationTest";
+
+pub fn is_test(a: &Value) -> bool {
+    a["tags"]
+        .as_array()
+        .is_some_and(|t| t.iter().any(|t| t == TEST_TAG))
+}
+
+pub const WEEKDAYS: [&str; 7] = [
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
+    "sunday",
+];
+
+/// `weekdays`, `weekends`, `daily`, or a comma list like `mon,wed,fri`, as
+/// the API's `weekDays` map.
+pub fn parse_days(input: &str) -> Result<Value, String> {
+    let on: Vec<bool> = match input.to_ascii_lowercase().as_str() {
+        "daily" | "everyday" | "every-day" => vec![true; 7],
+        "weekdays" => (0..7).map(|i| i < 5).collect(),
+        "weekends" => (0..7).map(|i| i >= 5).collect(),
+        list => {
+            let mut on = vec![false; 7];
+            for d in list.split(',').map(str::trim).filter(|d| !d.is_empty()) {
+                let i = WEEKDAYS
+                    .iter()
+                    .position(|w| d.len() >= 2 && w.starts_with(d))
+                    .ok_or_else(|| {
+                        format!("{d}: not a day (use mon,tue,... or weekdays/weekends/daily)")
+                    })?;
+                on[i] = true;
+            }
+            if !on.contains(&true) {
+                return Err(format!("{input}: no days given"));
+            }
+            on
+        }
+    };
+    Ok(WEEKDAYS
+        .iter()
+        .zip(on)
+        .map(|(d, on)| (d.to_string(), Value::Bool(on)))
+        .collect::<serde_json::Map<_, _>>()
+        .into())
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Action {
     /// Set the time, as `HH:MM:00`.
@@ -115,7 +166,7 @@ pub fn next(resp: &Value) -> Value {
         .flatten()
         .chain(std::iter::once(&resp["recommendedAlarm"]));
     candidates
-        .filter(|a| a["enabled"].as_bool() == Some(true))
+        .filter(|a| a["enabled"].as_bool() == Some(true) && !is_test(a))
         .filter_map(|a| Some((ts(&a["nextTimestamp"])?, a)))
         .filter(|(next, a)| ts(&a["endTimestamp"]).unwrap_or(*next) > now)
         .min_by_key(|(next, _)| *next)
@@ -153,6 +204,28 @@ mod tests {
         assert_eq!(parse_action("ON").unwrap(), Action::Enable(true));
         assert_eq!(parse_action("off").unwrap(), Action::Enable(false));
         assert_eq!(parse_action("9am").unwrap(), Action::Set("09:00:00".into()));
+    }
+
+    #[test]
+    fn parses_days() {
+        let d = parse_days("weekdays").unwrap();
+        assert_eq!(d["friday"], true);
+        assert_eq!(d["saturday"], false);
+        let d = parse_days("mon, WED,fri").unwrap();
+        assert_eq!(d["monday"], true);
+        assert_eq!(d["tuesday"], false);
+        assert_eq!(d["wednesday"], true);
+        assert_eq!(parse_days("th").unwrap()["thursday"], true);
+        assert!(parse_days("t").is_err());
+        assert!(parse_days("funday").is_err());
+        assert!(parse_days(",").is_err());
+    }
+
+    #[test]
+    fn spots_test_alarms() {
+        assert!(is_test(&json!({ "tags": [TEST_TAG] })));
+        assert!(!is_test(&json!({ "tags": [] })));
+        assert!(!is_test(&json!({})));
     }
 
     #[test]
