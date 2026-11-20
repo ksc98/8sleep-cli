@@ -43,22 +43,31 @@ fn now() -> u64 {
         .unwrap_or(0)
 }
 
-fn cache_path() -> Result<PathBuf> {
+/// `~/.cache/8sleep/<name>`.
+pub fn cache_path(name: &str) -> Result<PathBuf> {
     let dir = dirs::cache_dir().context("no cache directory")?;
-    Ok(dir.join("8sleep").join("token.json"))
+    Ok(dir.join("8sleep").join(name))
 }
 
 fn load_cache() -> Option<Token> {
-    let raw = fs::read(cache_path().ok()?).ok()?;
+    let raw = fs::read(cache_path("token.json").ok()?).ok()?;
     serde_json::from_slice(&raw).ok()
 }
 
-/// Write the cache atomically with 0600 permissions.
 fn save_cache(tok: &Token) -> Result<()> {
-    let path = cache_path()?;
+    write_private(&cache_path("token.json")?, &serde_json::to_vec(tok)?)
+}
+
+/// Write a cache file atomically with 0600 permissions.
+pub fn write_private(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
     let dir = path.parent().context("cache path has no parent")?;
     fs::create_dir_all(dir)?;
-    let tmp = dir.join(format!(".token.json.{}", std::process::id()));
+    let name = path.file_name().context("cache path has no file name")?;
+    let tmp = dir.join(format!(
+        ".{}.{}",
+        name.to_string_lossy(),
+        std::process::id()
+    ));
     let mut opts = fs::OpenOptions::new();
     opts.write(true).create(true).truncate(true);
     #[cfg(unix)]
@@ -69,9 +78,9 @@ fn save_cache(tok: &Token) -> Result<()> {
     let mut f = opts
         .open(&tmp)
         .with_context(|| format!("writing {}", tmp.display()))?;
-    f.write_all(&serde_json::to_vec(tok)?)?;
+    f.write_all(bytes)?;
     f.sync_all()?;
-    fs::rename(&tmp, &path)?;
+    fs::rename(&tmp, path)?;
     Ok(())
 }
 

@@ -206,13 +206,15 @@ fn run(cli: Cli) -> Result<()> {
         Cmd::Status { live: Some(every) } => status_live(&api, every, cli.json),
         Cmd::On => {
             let user = target_user(&api, cli.side)?;
-            set_state(&api, &user, "smart")?;
-            print_side(&api, &user, cli.json, "turned on")
+            print_side(&api, &user, cli.json, "turned on", || {
+                set_state(&api, &user, "smart")
+            })
         }
         Cmd::Off => {
             let user = target_user(&api, cli.side)?;
-            set_state(&api, &user, "off")?;
-            print_side(&api, &user, cli.json, "turned off")
+            print_side(&api, &user, cli.json, "turned off", || {
+                set_state(&api, &user, "off")
+            })
         }
         Cmd::Temp {
             value,
@@ -232,8 +234,10 @@ fn run(cli: Cli) -> Result<()> {
             if !off && phase.is_none() {
                 // In smart mode this overrides the running phase for tonight
                 // (overrideLevels.<phase>); the schedule itself is unchanged.
-                api.put(&url, json!({ "currentLevel": value }))?;
-                return print_side(&api, &user, cli.json, &format!("target set to {level}"));
+                let done = format!("target set to {level}");
+                return print_side(&api, &user, cli.json, &done, || {
+                    api.put(&url, json!({ "currentLevel": value }))
+                });
             }
             let phase = phase.unwrap_or(Phase::Now);
             let mut smart = cur["smart"].clone();
@@ -241,13 +245,8 @@ fn run(cli: Cli) -> Result<()> {
                 bail!("no smart schedule levels to change");
             }
             smart[phase.smart_key()] = json!(value);
-            api.put(&url, json!({ "smart": smart }))?;
             let mut msg = format!("schedule {} set to {level}", phase.name());
             if apply {
-                if off {
-                    set_state(&api, &user, "smart")?;
-                }
-                api.put(&url, json!({ "currentLevel": value }))?;
                 msg.push_str(if off {
                     ", turned on at it"
                 } else {
@@ -256,7 +255,16 @@ fn run(cli: Cli) -> Result<()> {
             } else if off {
                 msg.push_str("; the bed stays off");
             }
-            print_side(&api, &user, cli.json, &msg)
+            print_side(&api, &user, cli.json, &msg, || {
+                let mut t = api.put(&url, json!({ "smart": smart }))?;
+                if apply {
+                    if off {
+                        set_state(&api, &user, "smart")?;
+                    }
+                    t = api.put(&url, json!({ "currentLevel": value }))?;
+                }
+                Ok(t)
+            })
         }
         Cmd::Away { state } => {
             let user = target_user(&api, cli.side)?;
@@ -277,13 +285,15 @@ fn run(cli: Cli) -> Result<()> {
                 Toggle::On => "away mode on",
                 Toggle::Off => "away mode off",
             };
-            print_side(&api, &user, cli.json, msg)
+            print_side(&api, &user, cli.json, msg, || {
+                api.get(&format!("{APP_API}/users/{user}/temperature"))
+            })
         }
         Cmd::Prime => {
-            let me = me(&api)?;
+            let device_id = device_id(&api, false)?;
             let uid = api.user_id().to_owned();
             api.post(
-                &format!("{APP_API}/devices/{}/priming/tasks", me.device_id),
+                &format!("{APP_API}/devices/{device_id}/priming/tasks"),
                 json!({ "notifications": { "users": [uid], "meta": "rePriming" } }),
             )?;
             if cli.json {
@@ -638,25 +648,55 @@ fn print_alarms(list: &[Value], as_json: bool, done: Option<&str>) -> Result<()>
     Ok(())
 }
 
-struct Me {
-    device_id: String,
-    side: String,
-}
-
-fn me(api: &Api) -> Result<Me> {
+/// The account's device id. It only changes if the pod is replaced, so it's
+/// cached in `~/.cache/8sleep/device.json` (keyed by user) and `users/me` is
+/// read only when the cache is missing or `refresh` is set.
+fn device_id(api: &Api, refresh: bool) -> Result<String> {
+    let path = auth::cache_path("device.json")?;
+    if !refresh
+        && let Ok(raw) = std::fs::read(&path)
+        && let Ok(c) = serde_json::from_slice::<Value>(&raw)
+        && c["user_id"] == api.user_id()
+        && let Some(id) = c["device_id"].as_str()
+    {
+        return Ok(id.to_owned());
+    }
     let v = api.get(&format!("{CLIENT_API}/users/me"))?;
-    let dev = &v["user"]["currentDevice"];
-    Ok(Me {
-        device_id: dev["id"]
-            .as_str()
-            .context("account has no current device")?
-            .to_owned(),
-        side: dev["side"].as_str().unwrap_or("unknown").to_owned(),
-    })
+    let id = v["user"]["currentDevice"]["id"]
+        .as_str()
+        .context("account has no current device")?
+        .to_owned();
+    let cache = json!({ "user_id": api.user_id(), "device_id": id });
+    auth::write_private(&path, &serde_json::to_vec(&cache)?)?;
+    Ok(id)
 }
 
-fn device(api: &Api, id: &str) -> Result<Value> {
-    Ok(api.get(&format!("{CLIENT_API}/devices/{id}"))?["result"].take())
+/// The account's device. If the read fails, the cached id may be stale (a
+/// replaced pod), so the id is looked up again and the read retried once
+/// when it changed.
+fn device(api: &Api) -> Result<Value> {
+    let id = device_id(api, false)?;
+    let read = |id: &str| -> Result<Value> {
+        Ok(api.get(&format!("{CLIENT_API}/devices/{id}"))?["result"].take())
+    };
+    match read(&id) {
+        Ok(dev) => Ok(dev),
+        Err(e) => match device_id(api, true) {
+            Ok(fresh) if fresh != id => read(&fresh),
+            _ => Err(e),
+        },
+    }
+}
+
+/// Which side `user` is on: `solo` when the same user has both sides.
+fn side_of(dev: &Value, user: &str) -> &'static str {
+    let (l, r) = (dev["leftUserId"].as_str(), dev["rightUserId"].as_str());
+    match (l == Some(user), r == Some(user)) {
+        (true, true) => "solo",
+        (true, false) => "left",
+        (false, true) => "right",
+        _ => "unassigned",
+    }
 }
 
 /// The user whose temperature a command changes. Temperature is per user, so
@@ -665,8 +705,7 @@ fn target_user(api: &Api, side: Option<Side>) -> Result<String> {
     let Some(side) = side else {
         return Ok(api.user_id().to_owned());
     };
-    let me = me(api)?;
-    let dev = device(api, &me.device_id)?;
+    let dev = device(api)?;
     let left = dev["leftUserId"].as_str();
     let right = dev["rightUserId"].as_str();
     let user = match side {
@@ -680,32 +719,38 @@ fn target_user(api: &Api, side: Option<Side>) -> Result<String> {
     Ok(user.to_owned())
 }
 
-fn set_state(api: &Api, user: &str, state: &str) -> Result<()> {
+/// Switch the bed on (`smart`) or off. Returns the temperature object, which
+/// the PUT answers with.
+fn set_state(api: &Api, user: &str, state: &str) -> Result<Value> {
     api.put(
         &format!("{APP_API}/users/{user}/temperature"),
         json!({ "currentState": { "type": state } }),
-    )?;
-    Ok(())
+    )
 }
 
 fn state_type(temp: &Value) -> &str {
     temp["currentState"]["type"].as_str().unwrap_or("unknown")
 }
 
-/// One user's temperature and away state as a JSON object.
+/// One user's side as `status` shows it.
 fn side_info(api: &Api, user: &str) -> Result<Value> {
-    // Independent reads, fetched concurrently: each is a full API round trip.
+    side_with(api, user, || {
+        api.get(&format!("{APP_API}/users/{user}/temperature"))
+    })
+}
+
+/// One user's side, with `temperature` supplying the temperature object:
+/// a GET, or the response of a command's own write (a PUT to
+/// `/temperature` answers with the full object, so nothing is re-read). It
+/// runs concurrently with the other reads, each a full API round trip.
+fn side_with(api: &Api, user: &str, temperature: impl FnOnce() -> Result<Value>) -> Result<Value> {
     let (t, away, autopilot, alarms) = std::thread::scope(|sc| {
         let get = |url: String| sc.spawn(move || api.get(&url));
-        let t = get(format!("{APP_API}/users/{user}/temperature"));
         let away = get(format!("{APP_API}/users/{user}/away-mode"));
         let autopilot = get(format!("{APP_API}/users/{user}/autopilotDetails"));
         let alarms = get(format!("{APP_API_V2}/users/{user}/alarms"));
-        let join = |h: std::thread::ScopedJoinHandle<'_, Result<Value>>| {
-            h.join()
-                .unwrap_or_else(|_| bail!("request thread panicked"))
-        };
-        (join(t), join(away), join(autopilot), join(alarms))
+        let t = temperature();
+        (t, join(away), join(autopilot), join(alarms))
     });
     let (t, away, autopilot) = (t?, away?, autopilot?);
     // Accounts without a subscription get 403 from the alarms API.
@@ -781,25 +826,29 @@ fn phases(t: &Value, state: &str) -> Value {
         .collect()
 }
 
-/// Confirm a change, then show the side as it is now.
-fn print_side(api: &Api, user: &str, as_json: bool, done: &str) -> Result<()> {
-    let (s, me) = std::thread::scope(|sc| {
-        let me = sc.spawn(|| me(api));
-        let s = side_info(api, user);
-        (
-            s,
-            me.join()
-                .unwrap_or_else(|_| bail!("request thread panicked")),
-        )
+/// Make a change and show the side as it is after it. `change` returns the
+/// user's temperature object (a write's response, or a GET after a write
+/// elsewhere); the side's other reads and the device read run meanwhile.
+fn print_side(
+    api: &Api,
+    user: &str,
+    as_json: bool,
+    done: &str,
+    change: impl FnOnce() -> Result<Value>,
+) -> Result<()> {
+    let (s, dev) = std::thread::scope(|sc| {
+        let dev = sc.spawn(|| device(api));
+        let s = side_with(api, user, change);
+        (s, join(dev))
     });
     let s = s?;
     if as_json {
         println!("{}", serde_json::to_string_pretty(&s)?);
         return Ok(());
     }
-    let me = me?;
+    let side = side_of(&dev?, user);
     println!("{}\n", ui::ok(done));
-    let title = (me.side != "solo").then(|| ui::side_title(&me.side));
+    let title = (side != "solo").then(|| ui::side_title(side));
     if title.is_none() {
         println!("{}", ui::power_row(&s));
     }
@@ -809,25 +858,56 @@ fn print_side(api: &Api, user: &str, as_json: bool, done: &str) -> Result<()> {
     Ok(())
 }
 
+fn join<T>(h: std::thread::ScopedJoinHandle<'_, Result<T>>) -> Result<T> {
+    h.join()
+        .unwrap_or_else(|_| bail!("request thread panicked"))
+}
+
 /// Everything `status` shows, as JSON and as rendered lines.
+///
+/// One round of concurrent reads: the device (through the cached id) and
+/// your own side. Only a bed shared with someone else needs a second round
+/// for their side.
 fn status_snapshot(api: &Api) -> Result<(Value, Vec<String>)> {
-    let me = me(api)?;
-    let dev = device(api, &me.device_id)?;
+    let me = api.user_id();
+    let (dev, mine) = std::thread::scope(|sc| {
+        let dev = sc.spawn(|| device(api));
+        let mine = side_info(api, me);
+        (join(dev), mine)
+    });
+    let dev = dev?;
     let left = dev["leftUserId"].as_str().map(str::to_owned);
     let right = dev["rightUserId"].as_str().map(str::to_owned);
 
-    let mut sides = Vec::new();
     let assignments: Vec<(&str, Option<String>)> = match (&left, &right) {
         (Some(l), Some(r)) if l == r => vec![("solo", Some(l.clone()))],
         _ => vec![("left", left.clone()), ("right", right.clone())],
     };
-    for (label, user) in assignments {
-        let mut info = match &user {
-            Some(u) => side_info(api, u)?,
-            None => json!({ "on": false, "state": "unassigned" }),
-        };
+    // Your side is already fetched; anyone else's is read now, concurrently.
+    let mut mine = Some(mine);
+    let infos: Vec<Result<Value>> = std::thread::scope(|sc| {
+        let others: Vec<_> = assignments
+            .iter()
+            .map(|(_, user)| match user.as_deref() {
+                Some(u) if u != me => Some(sc.spawn(move || side_info(api, u))),
+                _ => None,
+            })
+            .collect();
+        assignments
+            .iter()
+            .zip(others)
+            .map(|((_, user), other)| match (user, other) {
+                (_, Some(h)) => join(h),
+                (Some(_), None) => mine.take().context("your side is listed twice")?,
+                (None, None) => Ok(json!({ "on": false, "state": "unassigned" })),
+            })
+            .collect()
+    });
+    let mut sides = Vec::new();
+    for ((label, user), info) in assignments.iter().zip(infos) {
+        let mut info = info?;
         info["side"] = json!(label);
-        info["you"] = json!(user.as_deref() == Some(api.user_id()));
+        info["you"] = json!(user.as_deref() == Some(me));
         sides.push(info);
     }
 
