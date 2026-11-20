@@ -85,7 +85,7 @@ const ROW_INDENT: usize = 4 + LABEL_WIDTH;
 const GAUGE_LEAD: usize = 5;
 
 /// `╷ target 81°F 0` with the tick at `col`, directly over (or under) its
-/// marker on the bar. Near the warm end it flips to `target 81°F 0 │` so it
+/// marker on the bar. Near the warm end it flips to `target 81°F 0 ╷` so it
 /// doesn't run past `end`.
 fn bar_label(
     name: &str,
