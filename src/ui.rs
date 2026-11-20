@@ -381,6 +381,23 @@ pub fn side_title(side: &str) -> &'static str {
     }
 }
 
+/// `live · every 5s · updated 5:31:02 PM · ctrl-c to quit`, or the error from
+/// the last failed refresh.
+pub fn live_footer(every: std::time::Duration, err: Option<&str>) -> String {
+    let now = jiff::Zoned::now().strftime("%-I:%M:%S %p").to_string();
+    let every = humantime::format_duration(every).to_string();
+    match err {
+        None => format!("  live · every {every} · updated {now} · ctrl-c to quit")
+            .dimmed()
+            .to_string(),
+        Some(e) => format!(
+            "  {} {}",
+            format!("refresh failed at {now}:").red().bold(),
+            e.red()
+        ),
+    }
+}
+
 pub fn ok(msg: &str) -> String {
     format!("{} {msg}", "✓".green().bold())
 }

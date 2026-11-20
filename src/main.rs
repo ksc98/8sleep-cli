@@ -44,7 +44,11 @@ struct Cli {
 #[derive(Subcommand)]
 enum Cmd {
     /// Show power, temperature, away mode and water for the bed.
-    Status,
+    Status {
+        /// Keep refreshing in place until Ctrl-C, every 5s or the given interval (e.g. --live 10s).
+        #[arg(long, num_args = 0..=1, default_missing_value = "5s", value_parser = humantime::parse_duration)]
+        live: Option<std::time::Duration>,
+    },
     /// Turn on (resumes the smart schedule).
     On,
     /// Turn off.
@@ -154,7 +158,8 @@ fn main() {
 fn run(cli: Cli) -> Result<()> {
     let api = Api::new()?;
     match cli.cmd {
-        Cmd::Status => status(&api, cli.json),
+        Cmd::Status { live: None } => status(&api, cli.json),
+        Cmd::Status { live: Some(every) } => status_live(&api, every, cli.json),
         Cmd::On => {
             let user = target_user(&api, cli.side)?;
             set_state(&api, &user, "smart")?;
@@ -729,7 +734,8 @@ fn print_side(api: &Api, user: &str, as_json: bool, done: &str) -> Result<()> {
     Ok(())
 }
 
-fn status(api: &Api, as_json: bool) -> Result<()> {
+/// Everything `status` shows, as JSON and as rendered lines.
+fn status_snapshot(api: &Api) -> Result<(Value, Vec<String>)> {
     let me = me(api)?;
     let dev = device(api, &me.device_id)?;
     let left = dev["leftUserId"].as_str().map(str::to_owned);
@@ -760,28 +766,75 @@ fn status(api: &Api, as_json: bool) -> Result<()> {
         "water ok"
     };
 
-    if as_json {
-        let out = json!({
-            "model": dev["modelString"],
-            "online": dev["online"],
-            "water": water,
-            "last_prime": dev["lastPrime"],
-            "sides": sides,
-        });
-        println!("{}", serde_json::to_string_pretty(&out)?);
-        return Ok(());
-    }
-
-    println!("{}", ui::device_line(&dev, water));
+    let mut lines = vec![ui::device_line(&dev, water)];
     for s in &sides {
         let side = s["side"].as_str().unwrap_or("?");
         let you = side != "solo" && s["you"].as_bool() == Some(true);
-        println!();
-        for line in ui::side_block(ui::side_title(side), you, s) {
+        lines.push(String::new());
+        lines.extend(ui::side_block(ui::side_title(side), you, s));
+    }
+    let out = json!({
+        "model": dev["modelString"],
+        "online": dev["online"],
+        "water": water,
+        "last_prime": dev["lastPrime"],
+        "sides": sides,
+    });
+    Ok((out, lines))
+}
+
+fn status(api: &Api, as_json: bool) -> Result<()> {
+    let (out, lines) = status_snapshot(api)?;
+    if as_json {
+        println!("{}", serde_json::to_string_pretty(&out)?);
+    } else {
+        for line in lines {
             println!("{line}");
         }
     }
     Ok(())
+}
+
+/// Redraw `status` in place every `every` until Ctrl-C, like `watch`. With
+/// `--json`, print one compact JSON object per refresh instead. A failed
+/// refresh keeps the last frame and shows the error in the footer.
+fn status_live(api: &Api, every: std::time::Duration, as_json: bool) -> Result<()> {
+    use std::io::{IsTerminal, Write};
+    if every < std::time::Duration::from_secs(2) {
+        bail!("--live interval must be at least 2s");
+    }
+    if !as_json && !std::io::stdout().is_terminal() {
+        bail!("--live needs a terminal; use --json --live to stream JSON");
+    }
+    let mut last: Vec<String> = Vec::new();
+    loop {
+        let started = std::time::Instant::now();
+        let snap = status_snapshot(api);
+        if as_json {
+            match snap {
+                Ok((v, _)) => println!("{v}"),
+                Err(e) => eprintln!("{}", ui::error(&format!("{e:#}"))),
+            }
+        } else {
+            let footer = match snap {
+                Ok((_, lines)) => {
+                    last = lines;
+                    ui::live_footer(every, None)
+                }
+                Err(e) => ui::live_footer(every, Some(&format!("{e:#}"))),
+            };
+            // Home the cursor and clear the screen, then draw the frame.
+            let mut frame = String::from("\x1b[H\x1b[2J");
+            for line in last.iter().chain([&String::new(), &footer]) {
+                frame.push_str(line);
+                frame.push('\n');
+            }
+            let mut out = anstream::stdout();
+            out.write_all(frame.as_bytes())?;
+            out.flush()?;
+        }
+        std::thread::sleep(every.saturating_sub(started.elapsed()));
+    }
 }
 
 #[cfg(test)]
