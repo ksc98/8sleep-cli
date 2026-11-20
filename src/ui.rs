@@ -21,11 +21,10 @@ pub const HELP_STYLES: Styles = Styles::styled()
 const GAUGE_CELLS: i32 = 41; // one cell per half step of the app's -10..=+10 scale
 const TARGET_MARK: &str = "◆";
 const NOW_MARK: &str = "●";
-/// Ticks joining a label to its marker. An ASCII `|` stops short of the cell
-/// edges in most fonts: between a full-height `│` (too long) and a half-height
-/// `╷` (too short).
-const TICK_ABOVE: &str = "|";
-const TICK_BELOW: &str = "|";
+/// Carets pointing from a label to its marker: `▾` down from a label above
+/// the bar, `▴` up from one below it.
+const CARET_ABOVE: &str = "▾";
+const CARET_BELOW: &str = "▴";
 
 const COOL: (f64, f64, f64) = (80.0, 150.0, 255.0);
 const NEUTRAL: (f64, f64, f64) = (200.0, 200.0, 200.0);
@@ -85,15 +84,15 @@ const ROW_INDENT: usize = 4 + LABEL_WIDTH;
 /// `cool ` before the first gauge cell.
 const GAUGE_LEAD: usize = 5;
 
-/// `| target 81°F 0` with the tick at `col`, directly over (or under) its
-/// marker on the bar. Near the warm end it flips to `target 81°F 0 |` so it
+/// `▾ target 81°F 0` with the caret at `col`, directly over (or under) its
+/// marker on the bar. Near the warm end it flips to `target 81°F 0 ▾` so it
 /// doesn't run past `end`.
 fn bar_label(
     name: &str,
     raw: i32,
     bold: bool,
     precise: bool,
-    tick: &str,
+    caret: &str,
     col: usize,
     end: usize,
 ) -> String {
@@ -114,12 +113,12 @@ fn bar_label(
         colored_level(&f, raw)
     };
     let text = format!("{} {fc} {}", name.dimmed(), app.dimmed());
-    let tick = tick.dimmed();
+    let caret = caret.dimmed();
     if col + width <= end {
-        format!("{}{tick} {text}", " ".repeat(col))
+        format!("{}{caret} {text}", " ".repeat(col))
     } else {
         format!(
-            "{}{text} {tick}",
+            "{}{text} {caret}",
             " ".repeat((col + 1).saturating_sub(width))
         )
     }
@@ -204,7 +203,15 @@ pub fn side_block(title: &str, you: bool, s: &Value) -> Vec<String> {
         let cell0 = ROW_INDENT + GAUGE_LEAD;
         let end = cell0 + GAUGE_CELLS as usize + GAUGE_LEAD;
         let col = |raw| cell0 + gauge_cell(raw) as usize;
-        lines.push(bar_label("target", t, true, false, TICK_ABOVE, col(t), end));
+        lines.push(bar_label(
+            "target",
+            t,
+            true,
+            false,
+            CARET_ABOVE,
+            col(t),
+            end,
+        ));
         lines.push(row("", "", gauge(t, now, on)));
         if let Some(n) = now {
             lines.push(bar_label(
@@ -212,7 +219,7 @@ pub fn side_block(title: &str, you: bool, s: &Value) -> Vec<String> {
                 n,
                 false,
                 true,
-                TICK_BELOW,
+                CARET_BELOW,
                 col(n),
                 end,
             ));
@@ -231,7 +238,7 @@ pub fn side_block(title: &str, you: bool, s: &Value) -> Vec<String> {
     lines
 }
 
-/// The smart schedule on one line: `now │ night │ dawn` (the running phase
+/// The smart schedule on one line: `now · night · dawn` (the running phase
 /// marked), then when it next starts and whether Autopilot is adjusting it.
 fn phase_rows(s: &Value) -> Vec<String> {
     let cells = phase_cells(&s["phases"]);
@@ -293,7 +300,7 @@ fn eta(secs: i64) -> String {
     }
 }
 
-/// `now 55°F -10 (0) │ night 78°F -1 │ dawn 82°F 0`: each phase's
+/// `now 55°F -10 (0) · night 78°F -1 · dawn 82°F 0`: each phase's
 /// level, with the saved one in parentheses when it was set by hand.
 fn phase_cells(phases: &Value) -> String {
     let mut cells = Vec::new();
@@ -319,7 +326,7 @@ fn phase_cells(phases: &Value) -> String {
         }
         cells.push(cell);
     }
-    cells.join(&" │ ".dimmed().to_string())
+    cells.join(&" · ".dimmed().to_string())
 }
 
 /// `8sleep schedule`: when it turns the bed on, then the level for each phase.
@@ -511,14 +518,14 @@ pub fn error(msg: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{TICK_ABOVE, TICK_BELOW, bar_label, eta};
+    use super::{CARET_ABOVE, CARET_BELOW, bar_label, eta};
 
-    /// Column of the tick once color codes are stripped.
-    fn tick_col(line: &str) -> usize {
+    /// Column of the caret once color codes are stripped.
+    fn caret_col(line: &str) -> usize {
         let plain = String::from_utf8(strip_ansi(line.as_bytes())).unwrap();
         plain
             .chars()
-            .position(|c| [TICK_ABOVE, TICK_BELOW].contains(&c.to_string().as_str()))
+            .position(|c| [CARET_ABOVE, CARET_BELOW].contains(&c.to_string().as_str()))
             .unwrap()
     }
 
@@ -539,16 +546,16 @@ mod tests {
     }
 
     #[test]
-    fn label_tick_sits_on_its_marker() {
-        // Room to the right: tick first, at the marker's column.
+    fn label_caret_points_at_its_marker() {
+        // Room to the right: caret first, at the marker's column.
         assert_eq!(
-            tick_col(&bar_label("target", 0, true, false, TICK_ABOVE, 30, 70)),
+            caret_col(&bar_label("target", 0, true, false, CARET_ABOVE, 30, 70)),
             30
         );
-        // Near the warm end the label flips left; the tick stays on the marker.
-        let flipped = bar_label("current", 100, false, true, TICK_BELOW, 65, 70);
-        assert_eq!(tick_col(&flipped), 65);
-        assert!(strip_ansi(flipped.as_bytes()).ends_with(TICK_BELOW.as_bytes()));
+        // Near the warm end the label flips left; the caret stays on the marker.
+        let flipped = bar_label("current", 100, false, true, CARET_BELOW, 65, 70);
+        assert_eq!(caret_col(&flipped), 65);
+        assert!(strip_ansi(flipped.as_bytes()).ends_with(CARET_BELOW.as_bytes()));
     }
 
     #[test]
