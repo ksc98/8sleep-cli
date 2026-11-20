@@ -9,16 +9,15 @@ Command-line control for an Eight Sleep Pod.
 8sleep temp -3                 # app scale (-10..+10)
 8sleep away on | off
 8sleep prime
-8sleep bedtime                 # when the schedule turns the bed on
-8sleep bedtime 11pm [--days weekdays|weekends|daily|mon,wed]
-8sleep bedtime on | off
-8sleep alarm                   # list alarms
+8sleep schedule                # bedtime and the now / night / dawn levels
+8sleep schedule 11pm [--days weekdays|weekends|daily|mon,wed]
+8sleep schedule on | off
+8sleep alarm                   # list alarms (`alarms` works too)
 8sleep alarm 8:30pm            # set the alarm time (also 7am, 20:30)
 8sleep alarm on | off
 8sleep alarm add 7am [--days weekdays|weekends|daily|mon,wed]
 8sleep alarm rm -n 2
 8sleep alarm test [--for 10s]     # ring a test alarm, then stop and remove it
-8sleep side [solo|left|right]  # show or change your side assignment
 ```
 
 `--side left|right|solo` targets whoever is assigned to that side. Without it,

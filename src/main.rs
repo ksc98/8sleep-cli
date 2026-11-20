@@ -62,7 +62,7 @@ enum Cmd {
     /// Start priming the water tank.
     Prime,
     /// List alarms, set an alarm's time (8:30pm, 7am, 20:30), or turn it on/off.
-    #[command(args_conflicts_with_subcommands = true)]
+    #[command(visible_alias = "alarms", args_conflicts_with_subcommands = true)]
     Alarm {
         #[command(subcommand)]
         sub: Option<AlarmCmd>,
@@ -73,20 +73,15 @@ enum Cmd {
         #[arg(short, long)]
         number: Option<usize>,
     },
-    /// Show the bedtime the schedule turns the bed on at, change its time
-    /// (11pm, 23:00) or days, or turn it on/off.
-    Bedtime {
-        /// A new time (11pm, 10:30pm, 23:00), or on / off.
+    /// Show the schedule (bedtime and the now/night/dawn levels), change the
+    /// bedtime (11pm, 23:00) or its days, or turn the schedule on/off.
+    Schedule {
+        /// A new bedtime (11pm, 10:30pm, 23:00), or on / off.
         #[arg(value_parser = alarm::parse_action)]
         action: Option<alarm::Action>,
         /// Run on these days: weekdays, weekends, daily, or a list like mon,wed,fri.
         #[arg(long, value_parser = alarm::parse_days)]
         days: Option<Value>,
-    },
-    /// Show your side assignment, or change it (solo = whole bed).
-    Side {
-        #[arg(value_enum)]
-        side: Option<Side>,
     },
 }
 
@@ -118,16 +113,6 @@ enum Side {
     Left,
     Right,
     Solo,
-}
-
-impl Side {
-    fn as_str(self) -> &'static str {
-        match self {
-            Side::Left => "left",
-            Side::Right => "right",
-            Side::Solo => "solo",
-        }
-    }
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -222,29 +207,9 @@ fn run(cli: Cli) -> Result<()> {
                 Some(AlarmCmd::Test { duration }) => alarm_test(&api, &user, duration, cli.json),
             }
         }
-        Cmd::Bedtime { action, days } => {
+        Cmd::Schedule { action, days } => {
             let user = target_user(&api, cli.side)?;
-            bedtime_cmd(&api, &user, action, days, cli.json)
-        }
-        Cmd::Side { side } => {
-            let me = me(&api)?;
-            let side = match side {
-                None => me.side,
-                Some(s) => {
-                    let uid = api.user_id().to_owned();
-                    api.put(
-                        &format!("{CLIENT_API}/users/{uid}/current-device"),
-                        json!({ "id": me.device_id, "side": s.as_str() }),
-                    )?;
-                    s.as_str().to_owned()
-                }
-            };
-            if cli.json {
-                println!("{}", json!({ "side": side }));
-            } else {
-                println!("{}", ui::side_title(&side));
-            }
-            Ok(())
+            schedule_cmd(&api, &user, action, days, cli.json)
         }
     }
 }
@@ -288,9 +253,10 @@ fn alarm_cmd(
     print_alarms(&list_alarms(api, user)?, as_json, Some(&done))
 }
 
-/// The schedule lives in `GET /temperature/pod` as `schedules` and is
-/// written back whole with `PUT /bedtime {"schedules": [...]}`.
-fn bedtime_cmd(
+/// The schedule's bedtime lives in `GET /temperature/pod` as `schedules` and
+/// is written back whole with `PUT /bedtime {"schedules": [...]}`. Phase
+/// levels come from `GET /temperature`.
+fn schedule_cmd(
     api: &Api,
     user: &str,
     action: Option<alarm::Action>,
@@ -306,7 +272,7 @@ fn bedtime_cmd(
     if action.is_some() || days.is_some() {
         let [s] = schedules.as_mut_slice() else {
             bail!(
-                "expected one bedtime schedule, found {}; change it in the Eight Sleep app",
+                "expected one schedule, found {}; change it in the Eight Sleep app",
                 schedules.len()
             );
         };
@@ -314,7 +280,7 @@ fn bedtime_cmd(
         match &action {
             Some(alarm::Action::Set(t)) => {
                 s["time"] = json!(t);
-                what.push(format!("set to {}", alarm::clock(t)));
+                what.push(format!("bedtime {}", alarm::clock(t)));
             }
             Some(alarm::Action::Enable(on)) => {
                 s["enabled"] = json!(on);
@@ -335,7 +301,7 @@ fn bedtime_cmd(
             &format!("{APP_API}/users/{user}/bedtime"),
             json!({ "schedules": schedules }),
         )?;
-        done = Some(format!("bedtime {}", what.join(", ")));
+        done = Some(format!("schedule {}", what.join(", ")));
         schedules = read()?;
     }
     let shown: Vec<Value> = schedules
@@ -346,18 +312,28 @@ fn bedtime_cmd(
             b
         })
         .collect();
+    let (t, autopilot) = std::thread::scope(|sc| {
+        let ap = sc.spawn(|| api.get(&format!("{APP_API}/users/{user}/autopilotDetails")));
+        let t = api.get(&format!("{APP_API}/users/{user}/temperature"));
+        (
+            t,
+            ap.join()
+                .unwrap_or_else(|_| bail!("request thread panicked")),
+        )
+    });
+    let t = t?;
+    let phases = phases(&t, state_type(&t));
+    let autopilot = autopilot?["isAutopilotActive"].as_bool() == Some(true);
     if as_json {
-        println!("{}", serde_json::to_string_pretty(&shown)?);
+        let out = json!({ "bedtimes": shown, "phases": phases, "autopilot": autopilot });
+        println!("{}", serde_json::to_string_pretty(&out)?);
         return Ok(());
     }
     if let Some(d) = done {
         println!("{}\n", ui::ok(&d));
     }
-    if shown.is_empty() {
-        println!("  no bedtime schedule");
-    }
-    for b in &shown {
-        println!("{}", ui::bedtime_line(b));
+    for line in ui::schedule_block(&shown, &phases, autopilot) {
+        println!("{line}");
     }
     Ok(())
 }

@@ -181,9 +181,29 @@ pub fn side_block(title: &str, you: bool, s: &Value) -> Vec<String> {
 /// The smart schedule on one line: `now │ night │ dawn` (the running phase
 /// marked), then when it next starts and whether Autopilot is adjusting it.
 fn phase_rows(s: &Value) -> Vec<String> {
+    let (cells, mut notes) = phase_cells(&s["phases"]);
+    if cells.is_empty() {
+        return Vec::new();
+    }
+    if let Some(time) = s["bedtime"]["time"].as_str() {
+        notes.push(format!(
+            "bedtime {} {}",
+            alarm::clock(time),
+            days_summary(&s["bedtime"]["days"])
+        ));
+    }
+    if s["autopilot"].as_bool() == Some(true) {
+        notes.push("Autopilot".to_string());
+    }
+    vec![row("", "schedule", with_notes(cells, &notes))]
+}
+
+/// `now 81°F 0 │ night 78°F -1 │ dawn 82°F 0`, plus notes for phases changed
+/// for tonight.
+fn phase_cells(phases: &Value) -> (String, Vec<String>) {
     let mut cells = Vec::new();
     let mut notes = Vec::new();
-    for p in s["phases"].as_array().into_iter().flatten() {
+    for p in phases.as_array().into_iter().flatten() {
         let Some(level) = p["level"].as_i64().map(|v| v as i32) else {
             continue;
         };
@@ -205,25 +225,49 @@ fn phase_rows(s: &Value) -> Vec<String> {
             ));
         }
     }
-    if cells.is_empty() {
-        return Vec::new();
-    }
-    if let Some(time) = s["bedtime"]["time"].as_str() {
-        notes.push(format!(
-            "bedtime {} {}",
-            alarm::clock(time),
-            days_summary(&s["bedtime"]["days"])
-        ));
-    }
-    if s["autopilot"].as_bool() == Some(true) {
-        notes.push("Autopilot".to_string());
-    }
-    let sep = " │ ".dimmed().to_string();
-    let mut line = cells.join(&sep);
+    (cells.join(&" │ ".dimmed().to_string()), notes)
+}
+
+fn with_notes(mut line: String, notes: &[String]) -> String {
     if !notes.is_empty() {
         line.push_str(&format!("   {}", notes.join(" · ").dimmed()));
     }
-    vec![row("", "schedule", line)]
+    line
+}
+
+/// `8sleep schedule`: when it turns the bed on, then the level for each phase.
+pub fn schedule_block(bedtimes: &[Value], phases: &Value, autopilot: bool) -> Vec<String> {
+    let mut out = Vec::new();
+    if bedtimes.is_empty() {
+        out.push(row("", "bedtime", "none".dimmed()));
+    }
+    for b in bedtimes {
+        let on = b["enabled"].as_bool() == Some(true);
+        let power = if on {
+            format!("{} {}", "●".green(), "on ".green().bold())
+        } else {
+            format!("{} {}", "○".dimmed(), "off".dimmed())
+        };
+        let time = alarm::clock(b["time"].as_str().unwrap_or("?"));
+        let time = if on {
+            time.bold().to_string()
+        } else {
+            time.dimmed().to_string()
+        };
+        out.push(row(
+            "",
+            "bedtime",
+            format!("{power}  {time}  {}", days_summary(&b["days"])),
+        ));
+    }
+    let (cells, mut notes) = phase_cells(phases);
+    if autopilot {
+        notes.push("Autopilot adjusts these overnight".to_string());
+    }
+    if !cells.is_empty() {
+        out.push(row("", "levels", with_notes(cells, &notes)));
+    }
+    out
 }
 
 /// The app's names for the API's `bedTimeLevel`, `initialSleepLevel` and
@@ -320,23 +364,6 @@ pub fn days_summary(days: &Value) -> String {
             .collect::<Vec<_>>()
             .join(" "),
     }
-}
-
-/// `8sleep bedtime` row: `● on   2:15 AM   daily`.
-pub fn bedtime_line(b: &Value) -> String {
-    let on = b["enabled"].as_bool() == Some(true);
-    let power = if on {
-        format!("{} {}", "●".green(), "on ".green().bold())
-    } else {
-        format!("{} {}", "○".dimmed(), "off".dimmed())
-    };
-    let time = format!("{:>8}", alarm::clock(b["time"].as_str().unwrap_or("?")));
-    let time = if on {
-        time.bold().to_string()
-    } else {
-        time.dimmed().to_string()
-    };
-    format!("  {power}  {time}   {}", days_summary(&b["days"]))
 }
 
 pub fn side_title(side: &str) -> &'static str {
