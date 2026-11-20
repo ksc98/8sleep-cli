@@ -23,10 +23,6 @@ const TARGET_MARK: &str = "◆";
 /// Nerd Font `md-circle_medium`, a step smaller than `◆` on the bar so the
 /// target stands out (`●` draws bigger than `◆`).
 const NOW_MARK: &str = "\u{f09de}";
-/// Nerd Font `md-chevron_up`, pointing from the current label up to its
-/// marker. Nerd Font glyphs need one installed; Ghostty on both of the user's
-/// machines uses JetBrainsMono NF.
-const CARET_BELOW: &str = "\u{f0143}";
 
 const COOL: (f64, f64, f64) = (80.0, 150.0, 255.0);
 const NEUTRAL: (f64, f64, f64) = (200.0, 200.0, 200.0);
@@ -49,7 +45,7 @@ fn colored_level(text: &str, raw: i32) -> String {
     text.truecolor(r, g, b).to_string()
 }
 
-/// `68°F  -6`, the degrees colored by level and the app scale dimmed.
+/// The bar cell a level falls on.
 fn gauge_cell(raw: i32) -> i32 {
     ((raw.clamp(-100, 100) + 100) as f64 * (GAUGE_CELLS - 1) as f64 / 200.0).round() as i32
 }
@@ -86,16 +82,16 @@ const ROW_INDENT: usize = 4 + LABEL_WIDTH;
 /// `cool ` before the first gauge cell.
 const GAUGE_LEAD: usize = 5;
 
-/// `<chevron> current 74°F -3.1` with the chevron at `col`, directly over (or under) its
-/// marker on the bar. Near the warm end it flips to `current 74°F -3.1 <chevron>` so it
-/// doesn't run past `end`.
-fn bar_label(
-    name: &str,
+/// `81°F 0` centered on its marker's column `col` (over the bar for the
+/// target, under it for the current level), kept between `start` and `end`.
+/// `precise` keeps a decimal on the app scale (the current level drifts
+/// between steps); `bold` marks the target.
+fn marker_value(
     raw: i32,
-    bold: bool,
     precise: bool,
-    caret: &str,
+    bold: bool,
     col: usize,
+    start: usize,
     end: usize,
 ) -> String {
     let f = format!("{}°F", temp::raw_to_f(raw));
@@ -104,43 +100,16 @@ fn bar_label(
     } else {
         temp::raw_to_app(raw)
     };
-    let width = [name, &f, &app]
-        .iter()
-        .map(|p| p.chars().count())
-        .sum::<usize>()
-        + 4;
+    let width = f.chars().count() + 1 + app.chars().count();
+    let left = (col + 1)
+        .saturating_sub(width.div_ceil(2))
+        .clamp(start, end.saturating_sub(width).max(start));
     let fc = if bold {
         colored_level(&f, raw).bold().to_string()
     } else {
         colored_level(&f, raw)
     };
-    let text = format!("{} {fc} {}", name.dimmed(), app.dimmed());
-    let caret = caret.dimmed();
-    if col + width <= end {
-        format!("{}{caret} {text}", " ".repeat(col))
-    } else {
-        format!(
-            "{}{text} {caret}",
-            " ".repeat((col + 1).saturating_sub(width))
-        )
-    }
-}
-
-/// The target's `81°F 0` centered over its marker at `col`, kept between
-/// `start` and `end`.
-fn value_over(raw: i32, col: usize, start: usize, end: usize) -> String {
-    let f = format!("{}°F", temp::raw_to_f(raw));
-    let app = temp::raw_to_app(raw);
-    let width = f.chars().count() + 1 + app.chars().count();
-    let left = (col + 1)
-        .saturating_sub(width.div_ceil(2))
-        .clamp(start, end.saturating_sub(width).max(start));
-    format!(
-        "{}{} {}",
-        " ".repeat(left),
-        colored_level(&f, raw).bold(),
-        app.dimmed()
-    )
+    format!("{}{fc} {}", " ".repeat(left), app.dimmed())
 }
 
 /// `  ◆ target   81°F`: an optional bar marker, a dimmed label, the value.
@@ -234,23 +203,15 @@ pub fn side_block(title: Option<&str>, you: bool, s: &Value) -> Vec<String> {
     // The API keeps reporting the current level while the bed is off.
     let now = s["level"].as_i64().map(|v| v as i32);
     if let Some(t) = target {
-        // The target's value sits centered over the diamond; the current
-        // level is labelled below, starting at (or ending on) its marker.
+        // Each value sits centered on its marker: the target's above the
+        // bar, the current level's below.
         let cell0 = ROW_INDENT + GAUGE_LEAD;
         let end = cell0 + GAUGE_CELLS as usize + GAUGE_LEAD;
         let col = |raw| cell0 + gauge_cell(raw) as usize;
-        lines.push(value_over(t, col(t), ROW_INDENT, end));
+        lines.push(marker_value(t, false, true, col(t), ROW_INDENT, end));
         lines.push(row("", "", gauge(t, now, on)));
         if let Some(n) = now {
-            lines.push(bar_label(
-                "current",
-                n,
-                false,
-                true,
-                CARET_BELOW,
-                col(n),
-                end,
-            ));
+            lines.push(marker_value(n, true, false, col(n), ROW_INDENT, end));
         }
     }
     lines.extend(phase_rows(s));
@@ -539,7 +500,7 @@ pub fn error(msg: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{CARET_BELOW, bar_label, eta, value_over};
+    use super::{eta, marker_value};
 
     #[test]
     fn formats_eta() {
@@ -548,15 +509,6 @@ mod tests {
         assert_eq!(eta(8 * 3600 + 30 * 60 + 59), "8h 30m");
         assert_eq!(eta(2 * 86400 + 3 * 3600 + 120), "2d 3h");
         assert_eq!(eta(-5), "<1m");
-    }
-
-    /// Column of the caret once color codes are stripped.
-    fn caret_col(line: &str) -> usize {
-        let plain = String::from_utf8(strip_ansi(line.as_bytes())).unwrap();
-        plain
-            .chars()
-            .position(|c| c.to_string() == CARET_BELOW)
-            .unwrap()
     }
 
     fn strip_ansi(b: &[u8]) -> Vec<u8> {
@@ -576,25 +528,18 @@ mod tests {
     }
 
     #[test]
-    fn target_value_centers_on_its_marker() {
+    fn value_centers_on_its_marker() {
         // `81°F 0` is 6 wide: its middle (column 2 or 3) sits on the marker.
-        let line = String::from_utf8(strip_ansi(value_over(0, 30, 13, 70).as_bytes())).unwrap();
+        let line = String::from_utf8(strip_ansi(
+            marker_value(0, false, true, 30, 13, 70).as_bytes(),
+        ))
+        .unwrap();
         assert_eq!(line.trim_end(), format!("{}81°F 0", " ".repeat(28)));
         // Clamped at the edges.
-        let line = String::from_utf8(strip_ansi(value_over(100, 69, 13, 70).as_bytes())).unwrap();
+        let line = String::from_utf8(strip_ansi(
+            marker_value(100, true, false, 69, 13, 70).as_bytes(),
+        ))
+        .unwrap();
         assert!(line.chars().count() <= 70);
-    }
-
-    #[test]
-    fn label_caret_points_at_its_marker() {
-        // Room to the right: caret first, at the marker's column.
-        assert_eq!(
-            caret_col(&bar_label("current", 0, false, true, CARET_BELOW, 30, 70)),
-            30
-        );
-        // Near the warm end the label flips left; the caret stays on the marker.
-        let flipped = bar_label("current", 100, false, true, CARET_BELOW, 65, 70);
-        assert_eq!(caret_col(&flipped), 65);
-        assert!(strip_ansi(flipped.as_bytes()).ends_with(CARET_BELOW.as_bytes()));
     }
 }
