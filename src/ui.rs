@@ -44,8 +44,12 @@ fn colored_level(text: &str, raw: i32) -> String {
 }
 
 /// `68°F  -6`, the degrees colored by level and the app scale dimmed.
+/// `111°F  +10` / ` 86°F  +1.7`: degrees right-aligned to the widest
+/// value (111°F) and the app level left-aligned behind a sign column, so
+/// stacked rows line up. Padding happens before coloring because escape
+/// codes would count toward the width.
 fn temp_pair(raw: i32, bold: bool, precise: bool) -> String {
-    let f = format!("{}°F", temp::raw_to_f(raw));
+    let f = format!("{:>5}", format!("{}°F", temp::raw_to_f(raw)));
     let f = if bold {
         colored_level(&f, raw).bold().to_string()
     } else {
@@ -56,7 +60,13 @@ fn temp_pair(raw: i32, bold: bool, precise: bool) -> String {
     } else {
         temp::raw_to_app(raw)
     };
-    format!("{f}  {}", format!("{app:>4}").dimmed())
+    // "0" has no sign; give it the sign column so digits stay aligned.
+    let app = if app.starts_with(['+', '-']) {
+        app
+    } else {
+        format!(" {app}")
+    };
+    format!("{f}  {}", app.dimmed())
 }
 
 fn gauge_cell(raw: i32) -> i32 {
