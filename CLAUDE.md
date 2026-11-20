@@ -23,6 +23,8 @@ Rust CLI for the Eight Sleep Pod. Package `eightsleep`, binary `8sleep`
 - Temperature, power and away are per user (`app-api /v1/users/{id}/...`), not per side. `--side` maps a side to the user in the device's `leftUserId`/`rightUserId`. In solo mode both are the same user.
 - Alarms: read `GET app-api /v2/users/{id}/alarms` (403 without a subscription), write the whole alarm back with `PUT /v1/users/{id}/alarms/{alarmId}` minus `alarm::SERVER_FIELDS`. `thermal.level` is 50 on the user's alarm; its scale is unknown, so it isn't shown as a bed level.
 - The API never returns degrees for a level, only raw levels. The °F table in `temp.rs` matches a Pod 5 app's °F display (checked by the user 2026-11-19). Eight Sleep lists the Pod 6 range as 12–43 °C, close to the table's 13–44 °C. Check the table against `tempBedC` in `/v1/users/{id}/intervals` once sessions exist.
+- `POST app-api /v1/users/{id}/vibration-test` (body `{}`) rings a test alarm now: it creates a one-off alarm (`pattern: TESTDRIVE`, power 100, no thermal) with a 20-minute window, which shows up in the alarms list. client-api and v2 return 404.
+- No endpoint seen exposes power or energy use.
 - The app labels the phases now / night / dawn and shows levels rounded to whole steps (`temp::raw_to_app`).
 - `GET app-api /v1/users/{id}/autopilotDetails` → `isAutopilotActive`. Autopilot rewrites the phase levels overnight.
 - Latency: a `PUT /temperature` takes ~0.8 s server-side even when it changes nothing (likely a synchronous round trip to the hub); GETs take ~0.1 s, plus ~0.22 s per TLS handshake. Independent reads run concurrently (`thread::scope`, `Api` is `&self`).
