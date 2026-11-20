@@ -8,7 +8,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand, ValueEnum};
 use serde_json::{Value, json};
 
-use api::{APP_API, Api, CLIENT_API};
+use api::{APP_API, APP_API_V2, Api, CLIENT_API};
 
 const EXAMPLES: &str = "\
 \x1b[1;92mExamples:\x1b[0m
@@ -123,7 +123,7 @@ fn run(cli: Cli) -> Result<()> {
             let msg = format!(
                 "target set to {}°F ({})",
                 temp::raw_to_f(value),
-                temp::raw_to_app(value)
+                temp::raw_to_app_precise(value)
             );
             print_side(&mut api, &user, cli.json, &msg)
         }
@@ -244,6 +244,8 @@ fn side_info(api: &mut Api, user: &str) -> Result<Value> {
     let t = api.get(&format!("{APP_API}/users/{user}/temperature"))?;
     let away = api.get(&format!("{APP_API}/users/{user}/away-mode"))?;
     let autopilot = api.get(&format!("{APP_API}/users/{user}/autopilotDetails"))?;
+    // Accounts without a subscription get 403 from the alarms API.
+    let alarms = api.get(&format!("{APP_API_V2}/users/{user}/alarms")).ok();
     let state = state_type(&t).to_owned();
     let level = t["currentDeviceLevel"].as_i64().map(|v| v as i32);
     let target = t["currentLevel"].as_i64().map(|v| v as i32);
@@ -258,7 +260,38 @@ fn side_info(api: &mut Api, user: &str) -> Result<Value> {
         "next_bedtime": t["nextSchedule"]["nextTimestamp"].as_str(),
         "autopilot": autopilot["isAutopilotActive"].as_bool(),
         "phases": phases(&t, &state),
+        "alarm": alarms.as_ref().map_or(Value::Null, next_alarm),
     }))
+}
+
+/// The soonest enabled alarm that hasn't finished ringing.
+fn next_alarm(resp: &Value) -> Value {
+    let now = jiff::Timestamp::now();
+    let ts = |v: &Value| v.as_str().and_then(|s| s.parse::<jiff::Timestamp>().ok());
+    let candidates = resp["alarms"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .chain(std::iter::once(&resp["recommendedAlarm"]));
+    let Some((next, a)) = candidates
+        .filter(|a| a["enabled"].as_bool() == Some(true))
+        .filter_map(|a| Some((ts(&a["nextTimestamp"])?, a)))
+        .filter(|(next, a)| ts(&a["endTimestamp"]).unwrap_or(*next) > now)
+        .min_by_key(|(next, _)| *next)
+    else {
+        return Value::Null;
+    };
+    let repeat = a["repeat"]["enabled"].as_bool() == Some(true);
+    json!({
+        "next": next.to_string(),
+        "time": a["time"],
+        "repeat": repeat,
+        "days": if repeat { a["repeat"]["weekDays"].clone() } else { Value::Null },
+        "vibration": a["vibration"]["enabled"].as_bool() == Some(true),
+        "thermal": a["thermal"]["enabled"].as_bool() == Some(true),
+        "thermal_level": a["thermal"]["level"],
+        "snoozing": a["snoozing"].as_bool() == Some(true),
+    })
 }
 
 /// The smart schedule's three phases, in order: (state suffix and
@@ -385,5 +418,23 @@ mod tests {
                 .iter()
                 .all(|x| x["active"] == false)
         );
+    }
+
+    #[test]
+    fn next_alarm_skips_disabled_and_finished() {
+        let resp = json!({
+            "alarms": [
+                { "enabled": true, "nextTimestamp": "2000-01-01T07:00:00Z",
+                  "endTimestamp": "2000-01-01T07:20:00Z" },
+                { "enabled": false, "nextTimestamp": "2999-01-01T06:00:00Z" },
+                { "enabled": true, "nextTimestamp": "2999-01-02T07:00:00Z",
+                  "repeat": { "enabled": false } },
+            ],
+            "recommendedAlarm": { "enabled": false },
+        });
+        let a = next_alarm(&resp);
+        assert_eq!(a["next"], "2999-01-02T07:00:00Z");
+        assert_eq!(a["repeat"], false);
+        assert_eq!(next_alarm(&json!({ "alarms": [] })), Value::Null);
     }
 }

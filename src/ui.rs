@@ -44,14 +44,19 @@ fn colored_level(text: &str, raw: i32) -> String {
 }
 
 /// `68°F  -6`, the degrees colored by level and the app scale dimmed.
-fn temp_pair(raw: i32, bold: bool) -> String {
+fn temp_pair(raw: i32, bold: bool, precise: bool) -> String {
     let f = format!("{}°F", temp::raw_to_f(raw));
     let f = if bold {
         colored_level(&f, raw).bold().to_string()
     } else {
         colored_level(&f, raw)
     };
-    format!("{f}  {}", format!("{:>4}", temp::raw_to_app(raw)).dimmed())
+    let app = if precise {
+        temp::raw_to_app_precise(raw)
+    } else {
+        temp::raw_to_app(raw)
+    };
+    format!("{f}  {}", format!("{app:>4}").dimmed())
 }
 
 fn gauge_cell(raw: i32) -> i32 {
@@ -125,11 +130,7 @@ pub fn device_line(dev: &Value, water: &str) -> String {
         _ => water.yellow().bold().to_string(),
     };
     let sep = " · ".dimmed().to_string();
-    let mut line = format!("{}{sep}{online}{sep}{water}", model.bold());
-    if let Some(p) = when(dev["lastPrime"].as_str()) {
-        line.push_str(&format!("{sep}{}", format!("primed {p}").dimmed()));
-    }
-    line
+    format!("{}{sep}{online}{sep}{water}", model.bold())
 }
 
 /// The block for one side of the bed (or the whole bed in solo mode).
@@ -148,73 +149,143 @@ pub fn side_block(title: &str, you: bool, s: &Value) -> Vec<String> {
     } else {
         format!("{} {}", "○".dimmed(), "off".dimmed())
     };
-    let state = s["state"].as_str().unwrap_or("?").replace(':', " · ");
-    head.push_str(&format!("   {power}   {}", state.dimmed()));
+    head.push_str(&format!("   {power}"));
+    // Smart phases show up in the schedule row; anything else is unusual.
+    let state = s["state"].as_str().unwrap_or("?");
+    if on && !state.starts_with("smart") {
+        head.push_str(&format!("   {}", state.dimmed()));
+    }
 
     let mut lines = vec![head];
     let target = s["target"].as_i64().map(|v| v as i32);
     let now = s["level"].as_i64().map(|v| v as i32).filter(|_| on);
     if let Some(t) = target {
-        lines.push(row(TARGET_MARK, "target", temp_pair(t, true)));
+        lines.push(row(TARGET_MARK, "target", temp_pair(t, true, false)));
     }
     if let Some(n) = now {
-        lines.push(row(NOW_MARK, "now", temp_pair(n, false)));
+        lines.push(row(NOW_MARK, "current", temp_pair(n, false, true)));
     }
     if let Some(t) = target {
         lines.push(row("", "", gauge(t, now)));
     }
     lines.extend(phase_rows(s));
+    if let Some(alarm) = alarm_row(&s["alarm"]) {
+        lines.push(alarm);
+    }
     if s["away"].as_bool() == Some(true) {
         lines.push(row("", "away", "on".yellow().bold()));
     }
     lines
 }
 
-/// The smart schedule: when it next starts, whether Autopilot is adjusting
-/// it, then one row per phase with the active one highlighted.
+/// The smart schedule's phases on one line (`now │ night │ dawn`, the
+/// running one marked), then when it next starts and whether Autopilot is
+/// adjusting it.
 fn phase_rows(s: &Value) -> Vec<String> {
-    let mut head = Vec::new();
-    if let Some(next) = when(s["next_bedtime"].as_str()) {
-        head.push(format!("next starts {next}"));
-    }
-    if s["autopilot"].as_bool() == Some(true) {
-        head.push("Autopilot adjusts these overnight".to_string());
-    }
-    let mut out = vec![row("", "schedule", head.join(" · ").dimmed())];
+    let mut cells = Vec::new();
+    let mut notes = Vec::new();
     for p in s["phases"].as_array().into_iter().flatten() {
         let Some(level) = p["level"].as_i64().map(|v| v as i32) else {
             continue;
         };
+        let name = phase_name(p["phase"].as_str().unwrap_or("?"));
         let active = p["active"].as_bool() == Some(true);
-        let name = format!("{:<15}", phase_name(p["phase"].as_str().unwrap_or("?")));
-        let name = if active {
+        let label = if active {
             format!("{} {}", "▸".bright_white().bold(), name.bold())
         } else {
-            format!("  {}", name.dimmed())
+            name.dimmed().to_string()
         };
-        let mut line = format!("{name}{}", temp_pair(level, active));
+        let f = colored_level(&format!("{}°F", temp::raw_to_f(level)), level);
+        cells.push(format!("{label} {f} {}", temp::raw_to_app(level).dimmed()));
         if p["overridden"].as_bool() == Some(true)
             && let Some(sched) = p["scheduled"].as_i64()
         {
-            let sched = sched as i32;
-            let note = format!(
-                "changed tonight, schedule {}°F {}",
-                temp::raw_to_f(sched),
-                temp::raw_to_app(sched)
-            );
-            line.push_str(&format!("   {}", note.dimmed()));
+            notes.push(format!(
+                "{name} changed tonight (schedule {})",
+                temp::raw_to_app(sched as i32)
+            ));
         }
-        out.push(row("", "", line));
+    }
+    if cells.is_empty() {
+        return Vec::new();
+    }
+    if let Some(next) = when(s["next_bedtime"].as_str()) {
+        notes.push(format!("starts {next}"));
+    }
+    if s["autopilot"].as_bool() == Some(true) {
+        notes.push("Autopilot adjusts overnight".to_string());
+    }
+    let sep = " │ ".dimmed().to_string();
+    let mut out = vec![row("", "schedule", cells.join(&sep))];
+    if !notes.is_empty() {
+        out.push(row("", "", notes.join(" · ").dimmed()));
     }
     out
 }
 
-/// The API's names: `bedTimeLevel`, `initialSleepLevel`, `finalSleepLevel`.
+/// The app's names for the API's `bedTimeLevel`, `initialSleepLevel` and
+/// `finalSleepLevel`.
 fn phase_name(phase: &str) -> &str {
     match phase {
-        "initial" => "initial sleep",
-        "final" => "final sleep",
+        "bedtime" => "now",
+        "initial" => "night",
+        "final" => "dawn",
         other => other,
+    }
+}
+
+/// `tomorrow 9:15 AM · weekdays · vibration, warming`.
+fn alarm_row(a: &Value) -> Option<String> {
+    let next = when(a["next"].as_str())?;
+    let mut parts = vec![next.bold().to_string()];
+    parts.push(if a["repeat"].as_bool() == Some(true) {
+        days_summary(&a["days"])
+    } else {
+        "once".to_string()
+    });
+    let mut wake = Vec::new();
+    if a["vibration"].as_bool() == Some(true) {
+        wake.push("vibration".to_string());
+    }
+    if a["thermal"].as_bool() == Some(true) {
+        wake.push("warming".to_string());
+    }
+    if !wake.is_empty() {
+        parts.push(wake.join(", "));
+    }
+    let sep = " · ".dimmed().to_string();
+    let mut line = parts.join(&sep);
+    if a["snoozing"].as_bool() == Some(true) {
+        line.push_str(&format!("{sep}{}", "snoozing".yellow().bold()));
+    }
+    Some(row("", "alarm", line))
+}
+
+fn days_summary(days: &Value) -> String {
+    const DAYS: [(&str, &str); 7] = [
+        ("monday", "Mon"),
+        ("tuesday", "Tue"),
+        ("wednesday", "Wed"),
+        ("thursday", "Thu"),
+        ("friday", "Fri"),
+        ("saturday", "Sat"),
+        ("sunday", "Sun"),
+    ];
+    let on: Vec<bool> = DAYS
+        .iter()
+        .map(|(k, _)| days[*k].as_bool() == Some(true))
+        .collect();
+    match on.as_slice() {
+        [true, true, true, true, true, true, true] => "every day".into(),
+        [true, true, true, true, true, false, false] => "weekdays".into(),
+        [false, false, false, false, false, true, true] => "weekends".into(),
+        _ => DAYS
+            .iter()
+            .zip(&on)
+            .filter(|(_, on)| **on)
+            .map(|((_, short), _)| *short)
+            .collect::<Vec<_>>()
+            .join(" "),
     }
 }
 

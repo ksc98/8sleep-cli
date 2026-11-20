@@ -9,6 +9,7 @@ use crate::auth::{self, Token};
 
 pub const CLIENT_API: &str = "https://client-api.8slp.net/v1";
 pub const APP_API: &str = "https://app-api.8slp.net/v1";
+pub const APP_API_V2: &str = "https://app-api.8slp.net/v2";
 
 pub struct Api {
     http: Client,

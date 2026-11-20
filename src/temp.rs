@@ -39,8 +39,20 @@ pub fn f_to_raw(f: i32) -> i32 {
         .unwrap_or(0)
 }
 
-/// Raw level on the app's -10..=+10 scale, e.g. -60 -> "-6", 15 -> "+1.5".
+/// Raw level on the app's -10..=+10 scale, rounded to a whole step the way
+/// the app shows it, e.g. -60 -> "-6", -14 -> "-1", 3 -> "0".
 pub fn raw_to_app(raw: i32) -> String {
+    let v = (raw as f64 / 10.0).round() as i32;
+    if v > 0 {
+        format!("+{v}")
+    } else {
+        v.to_string()
+    }
+}
+
+/// Raw level on the app's scale with one decimal when it isn't a whole step,
+/// e.g. -58 -> "-5.8", 15 -> "+1.5".
+pub fn raw_to_app_precise(raw: i32) -> String {
     let v = raw as f64 / 10.0;
     let s = if raw % 10 == 0 {
         format!("{v:.0}")
@@ -104,7 +116,11 @@ mod tests {
     #[test]
     fn app_scale_formatting() {
         assert_eq!(raw_to_app(-60), "-6");
-        assert_eq!(raw_to_app(15), "+1.5");
-        assert_eq!(raw_to_app(0), "0");
+        assert_eq!(raw_to_app(-14), "-1");
+        assert_eq!(raw_to_app(3), "0");
+        assert_eq!(raw_to_app(50), "+5");
+        assert_eq!(raw_to_app_precise(-58), "-5.8");
+        assert_eq!(raw_to_app_precise(15), "+1.5");
+        assert_eq!(raw_to_app_precise(0), "0");
     }
 }

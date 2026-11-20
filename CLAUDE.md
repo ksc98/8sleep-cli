@@ -20,6 +20,8 @@ Rust CLI for the Eight Sleep Pod. Package `eightsleep`, binary `8sleep`
 
 - Reference implementation: lukas-clarke/eight_sleep `custom_components/eight_sleep/pyEight/` (`eight.py`, `user.py`, `constants.py`).
 - Temperature, power and away are per user (`app-api /v1/users/{id}/...`), not per side. `--side` maps a side to the user in the device's `leftUserId`/`rightUserId`. In solo mode both are the same user.
+- Alarms: `GET app-api /v2/users/{id}/alarms` (403 without a subscription). `thermal.level` is 50 on the user's alarm; its scale is unknown, so it isn't shown as a bed level.
+- The app labels the phases now / night / dawn and shows levels rounded to whole steps (`temp::raw_to_app`).
 - `GET app-api /v1/users/{id}/autopilotDetails` → `isAutopilotActive`. Autopilot rewrites the phase levels overnight.
 - Never set `content-type` on bodyless requests: the edge answers 403.
 - The refresh-grant response has no `userId`. Keep the one from the password login.
