@@ -216,32 +216,28 @@ fn phase_rows(s: &Value) -> Vec<String> {
     vec![row("", "schedule", cells)]
 }
 
-/// `bedtime  2:15 AM · daily · cools in 8h 30m`. The verb compares the
+/// `bedtime  daily · cools at 1:45 AM · 7h 45m`. The verb compares the
 /// schedule's `now` level with the bed's current level: that's where the bed
 /// heads when the bedtime starts.
 fn bedtime_row(s: &Value) -> Option<String> {
-    let time = s["bedtime"]["time"].as_str()?;
+    let time = alarm::clock(s["bedtime"]["time"].as_str()?);
+    let start = s["phases"][0]["scheduled"].as_i64();
+    let current = s["level"].as_i64();
+    let verb = match (start, current) {
+        (Some(a), Some(b)) if a < b => "cools",
+        (Some(a), Some(b)) if a > b => "warms",
+        _ => "starts",
+    };
+    let sep = " · ".dimmed().to_string();
     let mut line = format!(
-        "{}{}{}",
-        alarm::clock(time).bold(),
-        " · ".dimmed(),
-        days_summary(&s["bedtime"]["days"])
+        "{}{sep}{verb} at {}",
+        days_summary(&s["bedtime"]["days"]),
+        time.bold()
     );
     let next: Option<jiff::Timestamp> = s["next_bedtime"].as_str().and_then(|t| t.parse().ok());
     if let Some(next) = next {
-        let start = s["phases"][0]["scheduled"].as_i64();
-        let current = s["level"].as_i64();
-        let verb = match (start, current) {
-            (Some(a), Some(b)) if a < b => "cools",
-            (Some(a), Some(b)) if a > b => "warms",
-            _ => "starts",
-        };
         let secs = (next - jiff::Timestamp::now()).get_seconds();
-        line.push_str(&format!(
-            "{}{}",
-            " · ".dimmed(),
-            format!("{verb} in {}", eta(secs)).dimmed()
-        ));
+        line.push_str(&format!("{sep}{}", eta(secs).dimmed()));
     }
     Some(row("", "bedtime", line))
 }
