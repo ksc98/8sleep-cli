@@ -106,8 +106,8 @@ fn run(cli: Cli) -> Result<()> {
         }
         Cmd::Away { state } => {
             let user = target_user(&mut api, cli.side)?;
-            // The API applies an away period immediately only when its
-            // timestamp is in the past, so backdate it a day.
+            // Backdated a day as upstream does: it reports the away period only
+            // applies immediately with a past timestamp.
             let ts = (jiff::Timestamp::now() - jiff::SignedDuration::from_hours(24))
                 .strftime("%Y-%m-%dT%H:%M:%S%.3fZ")
                 .to_string();

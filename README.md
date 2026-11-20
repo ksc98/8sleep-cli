@@ -34,7 +34,7 @@ with the refresh token, so 1Password is only asked again if a refresh fails.
 
 ## Temperature
 
-The API stores a raw level from -100 to 100. The app shows it as -10..+10 and
-as degrees through a lookup table, which this CLI uses for °F. The table comes
+The API stores a raw level from -100 to 100. The CLI shows it as -10..+10
+(raw ÷ 10) and as °F through a lookup table. The table comes
 from [lukas-clarke/eight_sleep](https://github.com/lukas-clarke/eight_sleep),
 the Home Assistant integration this CLI's API calls are based on.
