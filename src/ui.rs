@@ -21,10 +21,11 @@ pub const HELP_STYLES: Styles = Styles::styled()
 const GAUGE_CELLS: i32 = 41; // one cell per half step of the app's -10..=+10 scale
 const TARGET_MARK: &str = "◆";
 const NOW_MARK: &str = "●";
-/// Carets pointing from a label to its marker: `⏷` down from a label above
-/// the bar, `⏶` up from one below it.
-const CARET_ABOVE: &str = "⏷";
-const CARET_BELOW: &str = "⏶";
+/// Chevrons pointing from a label to its marker: Nerd Font `md-chevron_down`
+/// from a label above the bar, `md-chevron_up` from one below it. They need
+/// a Nerd Font; Ghostty on both of the user's machines uses JetBrainsMono NF.
+const CARET_ABOVE: &str = "\u{f0140}";
+const CARET_BELOW: &str = "\u{f0143}";
 
 const COOL: (f64, f64, f64) = (80.0, 150.0, 255.0);
 const NEUTRAL: (f64, f64, f64) = (200.0, 200.0, 200.0);
@@ -84,8 +85,8 @@ const ROW_INDENT: usize = 4 + LABEL_WIDTH;
 /// `cool ` before the first gauge cell.
 const GAUGE_LEAD: usize = 5;
 
-/// `⏷ target 81°F 0` with the caret at `col`, directly over (or under) its
-/// marker on the bar. Near the warm end it flips to `target 81°F 0 ⏷` so it
+/// `<chevron> target 81°F 0` with the chevron at `col`, directly over (or under) its
+/// marker on the bar. Near the warm end it flips to `target 81°F 0 <chevron>` so it
 /// doesn't run past `end`.
 fn bar_label(
     name: &str,
