@@ -10,9 +10,10 @@ Rust CLI for the Eight Sleep Pod. Package `eightsleep`, binary `8sleep`
 
 ## Code map
 
-- `src/main.rs`: clap (derive) commands, no subcommand = `status`, side → user resolution, status rendering.
+- `src/main.rs`: clap (derive) commands (no subcommand prints help), side → user resolution, status rendering.
 - `src/api.rs`: blocking HTTP client (shared across threads, HTTP/2) for `client-api.8slp.net` and `app-api.8slp.net`, retries once on 401 after a forced token refresh.
 - `src/auth.rs`: password and refresh grants, 1Password lookup, atomic 0600 token cache.
+- `src/alarm.rs`: alarm time parsing (12/24 h, bare `8:30` rejected as ambiguous), summaries, next-alarm pick, server-computed fields stripped before PUT.
 - `src/ui.rs`: colored rendering (owo-colors, printed via `anstream` so color drops when piped or under `NO_COLOR`), cool→warm gauge, clap help styles.
 - `src/temp.rs`: raw level ↔ °F table and ↔ app scale, temperature arg parsing.
 
@@ -20,7 +21,7 @@ Rust CLI for the Eight Sleep Pod. Package `eightsleep`, binary `8sleep`
 
 - Reference implementation: lukas-clarke/eight_sleep `custom_components/eight_sleep/pyEight/` (`eight.py`, `user.py`, `constants.py`).
 - Temperature, power and away are per user (`app-api /v1/users/{id}/...`), not per side. `--side` maps a side to the user in the device's `leftUserId`/`rightUserId`. In solo mode both are the same user.
-- Alarms: `GET app-api /v2/users/{id}/alarms` (403 without a subscription). `thermal.level` is 50 on the user's alarm; its scale is unknown, so it isn't shown as a bed level.
+- Alarms: read `GET app-api /v2/users/{id}/alarms` (403 without a subscription), write the whole alarm back with `PUT /v1/users/{id}/alarms/{alarmId}` minus `alarm::SERVER_FIELDS`. `thermal.level` is 50 on the user's alarm; its scale is unknown, so it isn't shown as a bed level.
 - The API never returns degrees for a level, only raw levels. The °F table in `temp.rs` matches a Pod 5 app's °F display (checked by the user 2026-11-19). Eight Sleep lists the Pod 6 range as 12–43 °C, close to the table's 13–44 °C. Check the table against `tempBedC` in `/v1/users/{id}/intervals` once sessions exist.
 - The app labels the phases now / night / dawn and shows levels rounded to whole steps (`temp::raw_to_app`).
 - `GET app-api /v1/users/{id}/autopilotDetails` → `isAutopilotActive`. Autopilot rewrites the phase levels overnight.

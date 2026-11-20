@@ -1,3 +1,4 @@
+mod alarm;
 mod api;
 mod auth;
 mod temp;
@@ -12,11 +13,12 @@ use api::{APP_API, APP_API_V2, Api, CLIENT_API};
 
 const EXAMPLES: &str = "\
 \x1b[1;92mExamples:\x1b[0m
-  8sleep                  show status
+  8sleep status           show the bed
   8sleep temp 68          set the target to 68°F
   8sleep temp -3          set the target on the app's -10..+10 scale
   8sleep off
   8sleep away on
+  8sleep alarm 8:30pm     move your alarm
   8sleep status --json";
 
 #[derive(Parser)]
@@ -25,6 +27,7 @@ const EXAMPLES: &str = "\
     version,
     about = "Control an Eight Sleep Pod",
     styles = ui::HELP_STYLES,
+    arg_required_else_help = true,
     after_help = EXAMPLES,
 )]
 struct Cli {
@@ -34,9 +37,8 @@ struct Cli {
     /// Print JSON instead of text.
     #[arg(long, global = true)]
     json: bool,
-    /// Defaults to `status`.
     #[command(subcommand)]
-    cmd: Option<Cmd>,
+    cmd: Cmd,
 }
 
 #[derive(Subcommand)]
@@ -59,6 +61,14 @@ enum Cmd {
     },
     /// Start priming the water tank.
     Prime,
+    /// List alarms, set an alarm's time (8:30pm, 7am, 20:30), or turn it on/off.
+    Alarm {
+        #[arg(value_parser = alarm::parse_action)]
+        action: Option<alarm::Action>,
+        /// Which alarm, by its number in `8sleep alarm`. Needed only when there's more than one.
+        #[arg(short, long)]
+        number: Option<usize>,
+    },
     /// Show your side assignment, or change it (solo = whole bed).
     Side {
         #[arg(value_enum)]
@@ -98,7 +108,7 @@ fn main() {
 
 fn run(cli: Cli) -> Result<()> {
     let api = Api::new()?;
-    match cli.cmd.unwrap_or(Cmd::Status) {
+    match cli.cmd {
         Cmd::Status => status(&api, cli.json),
         Cmd::On => {
             let user = target_user(&api, cli.side)?;
@@ -162,6 +172,10 @@ fn run(cli: Cli) -> Result<()> {
             }
             Ok(())
         }
+        Cmd::Alarm { action, number } => {
+            let user = target_user(&api, cli.side)?;
+            alarm_cmd(&api, &user, action, number, cli.json)
+        }
         Cmd::Side { side } => {
             let me = me(&api)?;
             let side = match side {
@@ -183,6 +197,65 @@ fn run(cli: Cli) -> Result<()> {
             Ok(())
         }
     }
+}
+
+fn alarm_cmd(
+    api: &Api,
+    user: &str,
+    action: Option<alarm::Action>,
+    number: Option<usize>,
+    as_json: bool,
+) -> Result<()> {
+    let list_url = format!("{APP_API_V2}/users/{user}/alarms");
+    let alarms = |v: Value| v["alarms"].as_array().cloned().unwrap_or_default();
+    let list = alarms(api.get(&list_url)?);
+    let Some(action) = action else {
+        return print_alarms(&list, as_json, None);
+    };
+    let idx = match (number, list.len()) {
+        (Some(n), len) if (1..=len).contains(&n) => n - 1,
+        (Some(n), len) => bail!("there is no alarm {n} (you have {len})"),
+        (None, 1) => 0,
+        (None, 0) => bail!("no alarms yet; create one in the Eight Sleep app"),
+        (None, len) => bail!("you have {len} alarms; pick one with --number (see `8sleep alarm`)"),
+    };
+    let mut body = list[idx].clone();
+    let id = body["id"].as_str().context("alarm has no id")?.to_owned();
+    let done = match &action {
+        alarm::Action::Set(t) => {
+            body["time"] = json!(t);
+            format!("alarm set to {}", alarm::clock(t))
+        }
+        alarm::Action::Enable(on) => {
+            body["enabled"] = json!(on);
+            format!("alarm {}", if *on { "on" } else { "off" })
+        }
+    };
+    if let Some(o) = body.as_object_mut() {
+        for k in alarm::SERVER_FIELDS {
+            o.remove(k);
+        }
+    }
+    api.put(&format!("{APP_API}/users/{user}/alarms/{id}"), body)?;
+    print_alarms(&alarms(api.get(&list_url)?), as_json, Some(&done))
+}
+
+fn print_alarms(list: &[Value], as_json: bool, done: Option<&str>) -> Result<()> {
+    let summaries: Vec<Value> = list.iter().map(alarm::summary).collect();
+    if as_json {
+        println!("{}", serde_json::to_string_pretty(&summaries)?);
+        return Ok(());
+    }
+    if let Some(d) = done {
+        println!("{}\n", ui::ok(d));
+    }
+    if summaries.is_empty() {
+        println!("  no alarms");
+    }
+    for (i, a) in summaries.iter().enumerate() {
+        println!("{}", ui::alarm_line(i + 1, a));
+    }
+    Ok(())
 }
 
 struct Me {
@@ -271,38 +344,8 @@ fn side_info(api: &Api, user: &str) -> Result<Value> {
         "next_bedtime": t["nextSchedule"]["nextTimestamp"].as_str(),
         "autopilot": autopilot["isAutopilotActive"].as_bool(),
         "phases": phases(&t, &state),
-        "alarm": alarms.as_ref().map_or(Value::Null, next_alarm),
+        "alarm": alarms.as_ref().map_or(Value::Null, alarm::next),
     }))
-}
-
-/// The soonest enabled alarm that hasn't finished ringing.
-fn next_alarm(resp: &Value) -> Value {
-    let now = jiff::Timestamp::now();
-    let ts = |v: &Value| v.as_str().and_then(|s| s.parse::<jiff::Timestamp>().ok());
-    let candidates = resp["alarms"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .chain(std::iter::once(&resp["recommendedAlarm"]));
-    let Some((next, a)) = candidates
-        .filter(|a| a["enabled"].as_bool() == Some(true))
-        .filter_map(|a| Some((ts(&a["nextTimestamp"])?, a)))
-        .filter(|(next, a)| ts(&a["endTimestamp"]).unwrap_or(*next) > now)
-        .min_by_key(|(next, _)| *next)
-    else {
-        return Value::Null;
-    };
-    let repeat = a["repeat"]["enabled"].as_bool() == Some(true);
-    json!({
-        "next": next.to_string(),
-        "time": a["time"],
-        "repeat": repeat,
-        "days": if repeat { a["repeat"]["weekDays"].clone() } else { Value::Null },
-        "vibration": a["vibration"]["enabled"].as_bool() == Some(true),
-        "thermal": a["thermal"]["enabled"].as_bool() == Some(true),
-        "thermal_level": a["thermal"]["level"],
-        "snoozing": a["snoozing"].as_bool() == Some(true),
-    })
 }
 
 /// The smart schedule's three phases, in order: (state suffix and
@@ -438,23 +481,5 @@ mod tests {
                 .iter()
                 .all(|x| x["active"] == false)
         );
-    }
-
-    #[test]
-    fn next_alarm_skips_disabled_and_finished() {
-        let resp = json!({
-            "alarms": [
-                { "enabled": true, "nextTimestamp": "2000-01-01T07:00:00Z",
-                  "endTimestamp": "2000-01-01T07:20:00Z" },
-                { "enabled": false, "nextTimestamp": "2999-01-01T06:00:00Z" },
-                { "enabled": true, "nextTimestamp": "2999-01-02T07:00:00Z",
-                  "repeat": { "enabled": false } },
-            ],
-            "recommendedAlarm": { "enabled": false },
-        });
-        let a = next_alarm(&resp);
-        assert_eq!(a["next"], "2999-01-02T07:00:00Z");
-        assert_eq!(a["repeat"], false);
-        assert_eq!(next_alarm(&json!({ "alarms": [] })), Value::Null);
     }
 }

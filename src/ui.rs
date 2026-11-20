@@ -5,7 +5,7 @@ use clap::builder::styling::{AnsiColor, Effects, Styles};
 use owo_colors::OwoColorize;
 use serde_json::Value;
 
-use crate::temp;
+use crate::{alarm, temp};
 
 const LABEL_WIDTH: usize = 9;
 /// Cargo's help colors.
@@ -234,21 +234,19 @@ fn phase_name(phase: &str) -> &str {
     }
 }
 
-/// `tomorrow 9:15 AM · weekdays · vibration, warming`.
-fn alarm_row(a: &Value) -> Option<String> {
-    let next = when(a["next"].as_str())?;
-    let mut parts = vec![next.bold().to_string()];
-    parts.push(if a["repeat"].as_bool() == Some(true) {
+/// `weekdays · vibration, warming`, plus `snoozing` while snoozed.
+fn alarm_details(a: &Value) -> String {
+    let mut parts = vec![if a["repeat"].as_bool() == Some(true) {
         days_summary(&a["days"])
     } else {
         "once".to_string()
-    });
+    }];
     let mut wake = Vec::new();
     if a["vibration"].as_bool() == Some(true) {
-        wake.push("vibration".to_string());
+        wake.push("vibration");
     }
     if a["thermal"].as_bool() == Some(true) {
-        wake.push("warming".to_string());
+        wake.push("warming");
     }
     if !wake.is_empty() {
         parts.push(wake.join(", "));
@@ -258,7 +256,39 @@ fn alarm_row(a: &Value) -> Option<String> {
     if a["snoozing"].as_bool() == Some(true) {
         line.push_str(&format!("{sep}{}", "snoozing".yellow().bold()));
     }
-    Some(row("", "alarm", line))
+    line
+}
+
+/// Status row: `tomorrow 9:15 AM · weekdays · vibration, warming`.
+fn alarm_row(a: &Value) -> Option<String> {
+    let next = when(a["next"].as_str())?;
+    let sep = " · ".dimmed().to_string();
+    Some(row(
+        "",
+        "alarm",
+        format!("{}{sep}{}", next.bold(), alarm_details(a)),
+    ))
+}
+
+/// `8sleep alarm` row: `1  ● on   9:15 AM  weekdays · vibration, warming  next tomorrow 9:15 AM`.
+pub fn alarm_line(n: usize, a: &Value) -> String {
+    let on = a["enabled"].as_bool() == Some(true);
+    let power = if on {
+        format!("{} {}", "●".green(), "on ".green().bold())
+    } else {
+        format!("{} {}", "○".dimmed(), "off".dimmed())
+    };
+    let time = format!("{:>8}", alarm::clock(a["time"].as_str().unwrap_or("?")));
+    let time = if on {
+        time.bold().to_string()
+    } else {
+        time.dimmed().to_string()
+    };
+    let mut line = format!("  {}  {power}  {time}   {}", n.dimmed(), alarm_details(a));
+    if on && let Some(next) = when(a["next"].as_str()) {
+        line.push_str(&format!("   {}", format!("next {next}").dimmed()));
+    }
+    line
 }
 
 fn days_summary(days: &Value) -> String {
