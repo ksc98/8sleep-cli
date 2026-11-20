@@ -80,41 +80,32 @@ const ROW_INDENT: usize = 4 + LABEL_WIDTH;
 /// `cool ` before the first gauge cell.
 const GAUGE_LEAD: usize = 5;
 
-/// `◆ target 81°F 0` placed so the glyph sits at `col`, directly over (or
-/// under) its marker on the bar. Flips to `target 81°F 0 ◆` when it would
-/// run past `end`.
-fn bar_label(
-    glyph: &str,
-    name: &str,
-    raw: i32,
-    bold: bool,
-    precise: bool,
-    col: usize,
-    end: usize,
-) -> String {
+/// `target 81°F 0` starting at `col`, directly over (or under) its marker on
+/// the bar. Ends at `col` instead when it would run past `end`.
+fn bar_label(name: &str, raw: i32, bold: bool, precise: bool, col: usize, end: usize) -> String {
     let f = format!("{}°F", temp::raw_to_f(raw));
     let app = if precise {
         temp::raw_to_app_precise(raw)
     } else {
         temp::raw_to_app(raw)
     };
-    let width = [glyph, name, &f, &app]
+    let width = [name, &f, &app]
         .iter()
         .map(|p| p.chars().count())
         .sum::<usize>()
-        + 3;
+        + 2;
     let fc = if bold {
         colored_level(&f, raw).bold().to_string()
     } else {
         colored_level(&f, raw)
     };
-    let g = glyph.bright_white().to_string();
     let text = format!("{} {fc} {}", name.dimmed(), app.dimmed());
-    if col + width <= end {
-        format!("{}{g} {text}", " ".repeat(col))
+    let start = if col + width <= end {
+        col
     } else {
-        format!("{}{text} {g}", " ".repeat((col + 1).saturating_sub(width)))
-    }
+        (col + 1).saturating_sub(width)
+    };
+    format!("{}{text}", " ".repeat(start))
 }
 
 /// `  ◆ target   81°F`: an optional bar marker, a dimmed label, the value.
@@ -196,18 +187,10 @@ pub fn side_block(title: &str, you: bool, s: &Value) -> Vec<String> {
         let cell0 = ROW_INDENT + GAUGE_LEAD;
         let end = cell0 + GAUGE_CELLS as usize + GAUGE_LEAD;
         let col = |raw| cell0 + gauge_cell(raw) as usize;
-        lines.push(bar_label(
-            TARGET_MARK,
-            "target",
-            t,
-            true,
-            false,
-            col(t),
-            end,
-        ));
+        lines.push(bar_label("target", t, true, false, col(t), end));
         lines.push(row("", "", gauge(t, now, on)));
         if let Some(n) = now {
-            lines.push(bar_label(NOW_MARK, "current", n, false, true, col(n), end));
+            lines.push(bar_label("current", n, false, true, col(n), end));
         }
     }
     lines.extend(phase_rows(s));
