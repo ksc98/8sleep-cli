@@ -150,6 +150,8 @@ pub fn summary(a: &Value) -> Value {
         "repeat": repeat,
         "days": if repeat { a["repeat"]["weekDays"].clone() } else { Value::Null },
         "vibration": a["vibration"]["enabled"].as_bool() == Some(true),
+        "vibration_power": a["vibration"]["powerLevel"],
+        "vibration_pattern": a["vibration"]["pattern"],
         "thermal": a["thermal"]["enabled"].as_bool() == Some(true),
         "thermal_level": a["thermal"]["level"],
         "snoozing": a["snoozing"].as_bool() == Some(true),

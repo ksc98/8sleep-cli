@@ -44,31 +44,6 @@ fn colored_level(text: &str, raw: i32) -> String {
 }
 
 /// `68°F  -6`, the degrees colored by level and the app scale dimmed.
-/// `111°F  +10` / ` 86°F  +1.7`: degrees right-aligned to the widest
-/// value (111°F) and the app level left-aligned behind a sign column, so
-/// stacked rows line up. Padding happens before coloring because escape
-/// codes would count toward the width.
-fn temp_pair(raw: i32, bold: bool, precise: bool) -> String {
-    let f = format!("{:>5}", format!("{}°F", temp::raw_to_f(raw)));
-    let f = if bold {
-        colored_level(&f, raw).bold().to_string()
-    } else {
-        colored_level(&f, raw)
-    };
-    let app = if precise {
-        temp::raw_to_app_precise(raw)
-    } else {
-        temp::raw_to_app(raw)
-    };
-    // "0" has no sign; give it the sign column so digits stay aligned.
-    let app = if app.starts_with(['+', '-']) {
-        app
-    } else {
-        format!(" {app}")
-    };
-    format!("{f}  {}", app.dimmed())
-}
-
 fn gauge_cell(raw: i32) -> i32 {
     ((raw.clamp(-100, 100) + 100) as f64 * (GAUGE_CELLS - 1) as f64 / 200.0).round() as i32
 }
@@ -98,6 +73,48 @@ fn gauge(target: i32, now: Option<i32>, on: bool) -> String {
         })
         .collect();
     format!("{} {bar} {}", "cool".dimmed(), "warm".dimmed())
+}
+
+/// Columns before a `row` value: two spaces, the marker, a space, the label.
+const ROW_INDENT: usize = 4 + LABEL_WIDTH;
+/// `cool ` before the first gauge cell.
+const GAUGE_LEAD: usize = 5;
+
+/// `◆ target 81°F 0` placed so the glyph sits at `col`, directly over (or
+/// under) its marker on the bar. Flips to `target 81°F 0 ◆` when it would
+/// run past `end`.
+fn bar_label(
+    glyph: &str,
+    name: &str,
+    raw: i32,
+    bold: bool,
+    precise: bool,
+    col: usize,
+    end: usize,
+) -> String {
+    let f = format!("{}°F", temp::raw_to_f(raw));
+    let app = if precise {
+        temp::raw_to_app_precise(raw)
+    } else {
+        temp::raw_to_app(raw)
+    };
+    let width = [glyph, name, &f, &app]
+        .iter()
+        .map(|p| p.chars().count())
+        .sum::<usize>()
+        + 3;
+    let fc = if bold {
+        colored_level(&f, raw).bold().to_string()
+    } else {
+        colored_level(&f, raw)
+    };
+    let g = glyph.bright_white().to_string();
+    let text = format!("{} {fc} {}", name.dimmed(), app.dimmed());
+    if col + width <= end {
+        format!("{}{g} {text}", " ".repeat(col))
+    } else {
+        format!("{}{text} {g}", " ".repeat((col + 1).saturating_sub(width)))
+    }
 }
 
 /// `  ◆ target   81°F`: an optional bar marker, a dimmed label, the value.
@@ -174,13 +191,24 @@ pub fn side_block(title: &str, you: bool, s: &Value) -> Vec<String> {
     // The API keeps reporting the current level while the bed is off.
     let now = s["level"].as_i64().map(|v| v as i32);
     if let Some(t) = target {
-        lines.push(row(TARGET_MARK, "target", temp_pair(t, true, false)));
-    }
-    if let Some(n) = now {
-        lines.push(row(NOW_MARK, "current", temp_pair(n, false, true)));
-    }
-    if let Some(t) = target {
+        // Target labelled above the bar, current below, each starting at
+        // (or ending on) its marker's column.
+        let cell0 = ROW_INDENT + GAUGE_LEAD;
+        let end = cell0 + GAUGE_CELLS as usize + GAUGE_LEAD;
+        let col = |raw| cell0 + gauge_cell(raw) as usize;
+        lines.push(bar_label(
+            TARGET_MARK,
+            "target",
+            t,
+            true,
+            false,
+            col(t),
+            end,
+        ));
         lines.push(row("", "", gauge(t, now, on)));
+        if let Some(n) = now {
+            lines.push(bar_label(NOW_MARK, "current", n, false, true, col(n), end));
+        }
     }
     lines.extend(phase_rows(s));
     if let Some(bedtime) = bedtime_row(s) {
@@ -338,7 +366,7 @@ fn phase_name(phase: &str) -> &str {
     }
 }
 
-/// `weekdays · vibration, warming`, plus `snoozing` while snoozed.
+/// `weekdays · vibration 50% intense, warming 50`, plus `snoozing` while snoozed.
 fn alarm_details(a: &Value) -> String {
     let mut parts = vec![if a["repeat"].as_bool() == Some(true) {
         days_summary(&a["days"])
@@ -347,10 +375,21 @@ fn alarm_details(a: &Value) -> String {
     }];
     let mut wake = Vec::new();
     if a["vibration"].as_bool() == Some(true) {
-        wake.push("vibration");
+        let mut v = "vibration".to_string();
+        if let Some(p) = a["vibration_power"].as_i64() {
+            v.push_str(&format!(" {p}%"));
+        }
+        if let Some(pat) = a["vibration_pattern"].as_str() {
+            v.push_str(&format!(" {}", pat.to_ascii_lowercase()));
+        }
+        wake.push(v);
     }
     if a["thermal"].as_bool() == Some(true) {
-        wake.push("warming");
+        // `thermal.level`'s scale isn't known, so it's shown as the raw number.
+        wake.push(match a["thermal_level"].as_i64() {
+            Some(l) => format!("warming {l}"),
+            None => "warming".to_string(),
+        });
     }
     if !wake.is_empty() {
         parts.push(wake.join(", "));
@@ -363,9 +402,10 @@ fn alarm_details(a: &Value) -> String {
     line
 }
 
-/// Status row: `tomorrow 9:15 AM · weekdays · vibration, warming`.
+/// Status row: `8:45 AM · weekdays · vibration 50% intense, warming 50`.
 fn alarm_row(a: &Value) -> Option<String> {
-    let next = when(a["next"].as_str())?;
+    a["next"].as_str()?;
+    let next = alarm::clock(a["time"].as_str()?);
     let sep = " · ".dimmed().to_string();
     Some(row(
         "",
@@ -374,7 +414,7 @@ fn alarm_row(a: &Value) -> Option<String> {
     ))
 }
 
-/// `8sleep alarm` row: `1  ● on   9:15 AM  weekdays · vibration, warming  next tomorrow 9:15 AM`.
+/// `8sleep alarm` row: `1  ● on   8:45 AM   weekdays · vibration 50% intense, warming 50   next tomorrow 8:45 AM`.
 pub fn alarm_line(n: usize, a: &Value) -> String {
     let on = a["enabled"].as_bool() == Some(true);
     let power = if on {
