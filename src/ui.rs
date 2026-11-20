@@ -154,8 +154,25 @@ pub fn when(ts: Option<&str>) -> Option<String> {
     })
 }
 
-/// Header line: model, connectivity, water.
-pub fn device_line(dev: &Value, water: &str) -> String {
+/// `● active` (green) or `○ inactive` (dimmed), plus the state when the bed
+/// runs something other than its smart schedule.
+pub fn power(s: &Value) -> String {
+    let on = s["on"].as_bool() == Some(true);
+    let mut out = if on {
+        format!("{} {}", "●".green(), "active".green().bold())
+    } else {
+        format!("{} {}", "○".dimmed(), "inactive".dimmed())
+    };
+    // Smart phases show up in the schedule row; anything else is unusual.
+    let state = s["state"].as_str().unwrap_or("?");
+    if on && !state.starts_with("smart") {
+        out.push_str(&format!(" {}", state.dimmed()));
+    }
+    out
+}
+
+/// Header line: model, connectivity, water and, for a solo bed, `power`.
+pub fn device_line(dev: &Value, water: &str, power: Option<&str>) -> String {
     let model = dev["modelString"].as_str().unwrap_or("Pod");
     let online = if dev["online"].as_bool() == Some(true) {
         format!("{} online", "●".green())
@@ -168,33 +185,31 @@ pub fn device_line(dev: &Value, water: &str) -> String {
         _ => water.yellow().bold().to_string(),
     };
     let sep = " · ".dimmed().to_string();
-    format!("{}{sep}{online}{sep}{water}", model.bold())
+    let mut line = format!("{}{sep}{online}{sep}{water}", model.bold());
+    if let Some(p) = power {
+        line.push_str(&format!("{sep}{p}"));
+    }
+    line
 }
 
-/// The block for one side of the bed (or the whole bed in solo mode).
-pub fn side_block(title: &str, you: bool, s: &Value) -> Vec<String> {
-    let mut head = format!("  {}", title.bold());
-    if you {
-        head.push_str(&format!(" {}", "(you)".dimmed()));
-    }
-    if s["state"] == "unassigned" {
-        head.push_str(&format!("  {}", "unassigned".dimmed()));
-        return vec![head];
+/// The block for one side of the bed. `title` heads it (`left side (you)
+/// ● active`) on a split bed; a solo bed passes `None` and shows its power
+/// elsewhere.
+pub fn side_block(title: Option<&str>, you: bool, s: &Value) -> Vec<String> {
+    let mut lines = Vec::new();
+    if let Some(title) = title {
+        let mut head = format!("  {}", title.bold());
+        if you {
+            head.push_str(&format!(" {}", "(you)".dimmed()));
+        }
+        if s["state"] == "unassigned" {
+            head.push_str(&format!("  {}", "unassigned".dimmed()));
+            return vec![head];
+        }
+        head.push_str(&format!("   {}", power(s)));
+        lines.push(head);
     }
     let on = s["on"].as_bool() == Some(true);
-    let power = if on {
-        format!("{} {}", "●".green(), "on".green().bold())
-    } else {
-        format!("{} {}", "○".dimmed(), "off".dimmed())
-    };
-    head.push_str(&format!("   {power}"));
-    // Smart phases show up in the schedule row; anything else is unusual.
-    let state = s["state"].as_str().unwrap_or("?");
-    if on && !state.starts_with("smart") {
-        head.push_str(&format!("   {}", state.dimmed()));
-    }
-
-    let mut lines = vec![head];
     let target = s["target"].as_i64().map(|v| v as i32);
     // The API keeps reporting the current level while the bed is off.
     let now = s["level"].as_i64().map(|v| v as i32);
@@ -485,7 +500,6 @@ pub fn days_summary(days: &Value) -> String {
 
 pub fn side_title(side: &str) -> &'static str {
     match side {
-        "solo" => "whole bed",
         "left" => "left side",
         "right" => "right side",
         _ => "bed",
