@@ -6,7 +6,7 @@ Rust CLI for the Eight Sleep Pod. Package `eightsleep`, binary `8sleep`
 ## Workflow
 
 - After every change: `cargo test`, `cargo install --path . --force`, test the installed `~/.cargo/bin/8sleep`, then commit and push to `main` on `ksc98/8sleep-cli`.
-- No CI yet. Don't add GitHub Actions or other CI until asked.
+- Releases: bump `Cargo.toml`, commit, tag `vX.Y.Z` and push the tag. `.github/workflows/release.yml` builds macOS (arm64, x86_64) and Linux (x86_64, arm64) binaries on native runners (aws-lc-sys needs each platform's C toolchain, so no cross builds from Linux) and attaches them to the release. Then `scripts/formula.sh X.Y.Z` writes `Formula/eightsleep.rb` in `~/dev/homebrew-tap` from the release assets' digests; commit it as the noreply identity. No other CI.
 
 ## Code map
 
