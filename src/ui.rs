@@ -163,13 +163,59 @@ pub fn side_block(title: &str, you: bool, s: &Value) -> Vec<String> {
     if let Some(t) = target {
         lines.push(row("", "", gauge(t, now)));
     }
+    lines.extend(phase_rows(s));
     if s["away"].as_bool() == Some(true) {
         lines.push(row("", "away", "on".yellow().bold()));
     }
-    if let Some(next) = when(s["next_bedtime"].as_str()) {
-        lines.push(row("", "bedtime", next));
-    }
     lines
+}
+
+/// The smart schedule: when it next starts, whether Autopilot is adjusting
+/// it, then one row per phase with the active one highlighted.
+fn phase_rows(s: &Value) -> Vec<String> {
+    let mut head = Vec::new();
+    if let Some(next) = when(s["next_bedtime"].as_str()) {
+        head.push(format!("next starts {next}"));
+    }
+    if s["autopilot"].as_bool() == Some(true) {
+        head.push("Autopilot adjusts these overnight".to_string());
+    }
+    let mut out = vec![row("", "schedule", head.join(" · ").dimmed())];
+    for p in s["phases"].as_array().into_iter().flatten() {
+        let Some(level) = p["level"].as_i64().map(|v| v as i32) else {
+            continue;
+        };
+        let active = p["active"].as_bool() == Some(true);
+        let name = format!("{:<15}", phase_name(p["phase"].as_str().unwrap_or("?")));
+        let name = if active {
+            format!("{} {}", "▸".bright_white().bold(), name.bold())
+        } else {
+            format!("  {}", name.dimmed())
+        };
+        let mut line = format!("{name}{}", temp_pair(level, active));
+        if p["overridden"].as_bool() == Some(true)
+            && let Some(sched) = p["scheduled"].as_i64()
+        {
+            let sched = sched as i32;
+            let note = format!(
+                "changed tonight, schedule {}°F {}",
+                temp::raw_to_f(sched),
+                temp::raw_to_app(sched)
+            );
+            line.push_str(&format!("   {}", note.dimmed()));
+        }
+        out.push(row("", "", line));
+    }
+    out
+}
+
+/// The API's names: `bedTimeLevel`, `initialSleepLevel`, `finalSleepLevel`.
+fn phase_name(phase: &str) -> &str {
+    match phase {
+        "initial" => "initial sleep",
+        "final" => "final sleep",
+        other => other,
+    }
 }
 
 pub fn side_title(side: &str) -> &'static str {

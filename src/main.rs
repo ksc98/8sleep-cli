@@ -243,6 +243,7 @@ fn state_type(temp: &Value) -> &str {
 fn side_info(api: &mut Api, user: &str) -> Result<Value> {
     let t = api.get(&format!("{APP_API}/users/{user}/temperature"))?;
     let away = api.get(&format!("{APP_API}/users/{user}/away-mode"))?;
+    let autopilot = api.get(&format!("{APP_API}/users/{user}/autopilotDetails"))?;
     let state = state_type(&t).to_owned();
     let level = t["currentDeviceLevel"].as_i64().map(|v| v as i32);
     let target = t["currentLevel"].as_i64().map(|v| v as i32);
@@ -255,7 +256,39 @@ fn side_info(api: &mut Api, user: &str) -> Result<Value> {
         "target_f": target.map(temp::raw_to_f),
         "away": away["isAway"].as_bool(),
         "next_bedtime": t["nextSchedule"]["nextTimestamp"].as_str(),
+        "autopilot": autopilot["isAutopilotActive"].as_bool(),
+        "phases": phases(&t, &state),
     }))
+}
+
+/// The smart schedule's three phases, in order: (state suffix and
+/// `overrideLevels` key, `smart` key).
+const PHASES: [(&str, &str); 3] = [
+    ("bedtime", "bedTimeLevel"),
+    ("initial", "initialSleepLevel"),
+    ("final", "finalSleepLevel"),
+];
+
+/// Each phase's effective level. A `temp` change during a phase lands in
+/// `overrideLevels.<phase>` and wins over the schedule's level.
+fn phases(t: &Value, state: &str) -> Value {
+    let active = state.strip_prefix("smart:");
+    PHASES
+        .iter()
+        .map(|&(name, key)| {
+            let scheduled = t["smart"][key].as_i64();
+            let overridden = t["overrideLevels"][name].as_i64();
+            let level = overridden.or(scheduled);
+            json!({
+                "phase": name,
+                "level": level,
+                "level_f": level.map(|l| temp::raw_to_f(l as i32)),
+                "scheduled": scheduled,
+                "overridden": overridden.is_some() && overridden != scheduled,
+                "active": active == Some(name),
+            })
+        })
+        .collect()
 }
 
 /// Confirm a change, then show the side as it is now.
@@ -326,4 +359,31 @@ fn status(api: &mut Api, as_json: bool) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn phases_apply_overrides_and_mark_active() {
+        let t = json!({
+            "smart": { "bedTimeLevel": 0, "initialSleepLevel": -14, "finalSleepLevel": 3 },
+            "overrideLevels": { "bedtime": -60 },
+        });
+        let p = phases(&t, "smart:bedtime");
+        assert_eq!(p[0]["level"], -60);
+        assert_eq!(p[0]["overridden"], true);
+        assert_eq!(p[0]["active"], true);
+        assert_eq!(p[1]["level"], -14);
+        assert_eq!(p[1]["overridden"], false);
+        assert_eq!(p[1]["active"], false);
+        assert!(
+            phases(&t, "off")
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|x| x["active"] == false)
+        );
+    }
 }
