@@ -268,17 +268,8 @@ fn event_rows(events: &Value) -> Vec<String> {
     };
     list.iter()
         .enumerate()
-        .map(|(i, c)| {
-            let time = c["time"]
-                .as_str()
-                .and_then(|t| t.parse::<jiff::Timestamp>().ok())
-                .map(|t| {
-                    t.to_zoned(jiff::tz::TimeZone::system())
-                        .strftime("%-I:%M %p")
-                        .to_string()
-                })
-                .unwrap_or_default();
-            let text = c["text"].as_str().unwrap_or("?");
+        .map(|(i, e)| {
+            let (_, time, text) = event_parts(e);
             let label = if i == 0 { "events" } else { "" };
             row(
                 "",
@@ -287,6 +278,52 @@ fn event_rows(events: &Value) -> Vec<String> {
             )
         })
         .collect()
+}
+
+/// An event's local day, local time and text.
+fn event_parts(e: &Value) -> (Option<jiff::civil::Date>, String, &str) {
+    let at = e["time"]
+        .as_str()
+        .and_then(|t| t.parse::<jiff::Timestamp>().ok())
+        .map(|t| t.to_zoned(jiff::tz::TimeZone::system()));
+    let time = at
+        .as_ref()
+        .map(|z| z.strftime("%-I:%M %p").to_string())
+        .unwrap_or_default();
+    (
+        at.map(|z| z.date()),
+        time,
+        e["text"].as_str().unwrap_or("?"),
+    )
+}
+
+/// `8sleep events`: a heading per day (`today`, `yesterday`, `Thu Nov 19`),
+/// then that day's events, newest first.
+pub fn event_lines(list: &[Value]) -> Vec<String> {
+    if list.is_empty() {
+        return vec![format!("  {}", "no events".dimmed())];
+    }
+    let today = jiff::Zoned::now().date();
+    let mut lines = Vec::new();
+    let mut day = None;
+    for e in list {
+        let (date, time, text) = event_parts(e);
+        if date != day {
+            day = date;
+            let head = match date {
+                Some(d) if d == today => "today".to_string(),
+                Some(d) if Some(d) == today.yesterday().ok() => "yesterday".to_string(),
+                Some(d) => d.strftime("%a %b %-d").to_string(),
+                None => "?".to_string(),
+            };
+            if !lines.is_empty() {
+                lines.push(String::new());
+            }
+            lines.push(format!("  {}", head.bold()));
+        }
+        lines.push(format!("  {}  {text}", format!("{time:>8}").dimmed()));
+    }
+    lines
 }
 
 /// The smart schedule on one line: `now │ night │ dawn` (the running phase

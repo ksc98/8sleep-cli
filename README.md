@@ -12,6 +12,7 @@ Command-line control for an Eight Sleep Pod.
 8sleep temp 0 --apply          # save it and run at it now, turning the bed on if needed
 8sleep away on | off
 8sleep prime
+8sleep events [--since 7d]       # what changed, newest first (default: last 24h; also a date: --since 2026-11-19)
 8sleep schedule                # bedtimes and the now / night / dawn levels (`bedtime` works too)
 8sleep bedtime 8:30pm [--days weekdays|weekends|daily|mon,wed]
 8sleep bedtime on | off

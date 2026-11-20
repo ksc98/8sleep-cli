@@ -81,6 +81,14 @@ enum Cmd {
     },
     /// Prime the water tank
     Prime,
+    /// Show what changed: power, dial, schedule and level edits, Autopilot
+    ///
+    /// Newest first, from the account's event log.
+    Events {
+        /// How far back: a duration (12h, 7d, 2w) or a date (2026-11-19).
+        #[arg(long, default_value = "24h", value_parser = events::parse_since)]
+        since: jiff::Timestamp,
+    },
     /// Manage alarms
     ///
     /// List alarms, set an alarm's time (8:30pm, 7am, 20:30), or turn it on/off.
@@ -304,6 +312,10 @@ fn run(cli: Cli) -> Result<()> {
                 println!("{}", ui::ok("priming started"));
             }
             Ok(())
+        }
+        Cmd::Events { since } => {
+            let user = target_user(&api, cli.side)?;
+            events_cmd(&api, &user, since, cli.json)
         }
         Cmd::Alarm {
             sub,
@@ -729,8 +741,9 @@ fn state_type(temp: &Value) -> &str {
 
 /// One user's side as `status` shows it, with its recent events.
 fn side_info(api: &Api, user: &str) -> Result<Value> {
+    let from = jiff::Timestamp::now() - events::STATUS_WINDOW;
     let (s, log) = std::thread::scope(|sc| {
-        let log = sc.spawn(|| api.get(&events::url(user)));
+        let log = sc.spawn(|| api.get(&events::url(user, from)));
         let s = side_with(api, user, || {
             api.get(&format!("{APP_API}/users/{user}/temperature"))
         });
@@ -739,7 +752,7 @@ fn side_info(api: &Api, user: &str) -> Result<Value> {
     let mut s = s?;
     // The change log is extra: if it fails, status shows the rest.
     s["events"] = match log {
-        Ok(log) => json!(events::list(&log, &s)),
+        Ok(log) => json!(events::recent(&log, &s, from)),
         Err(_) => Value::Null,
     };
     Ok(s)
@@ -854,6 +867,30 @@ fn print_side(
         println!("{}", ui::power_row(&s));
     }
     for line in ui::side_block(title, false, &s) {
+        println!("{line}");
+    }
+    Ok(())
+}
+
+/// `8sleep events`. The temperature read supplies the running phase's
+/// start, which the log doesn't record.
+fn events_cmd(api: &Api, user: &str, since: jiff::Timestamp, as_json: bool) -> Result<()> {
+    let (log, t) = std::thread::scope(|sc| {
+        let t = sc.spawn(|| api.get(&format!("{APP_API}/users/{user}/temperature")));
+        (api.get(&events::url(user, since)), join(t))
+    });
+    let (log, t) = (log?, t?);
+    let state = state_type(&t);
+    let side = json!({
+        "state": state,
+        "phase_since": (state != "off").then(|| t["currentState"]["started"].as_str()).flatten(),
+    });
+    let list = events::list(&log, &side, since, as_json);
+    if as_json {
+        println!("{}", serde_json::to_string_pretty(&list)?);
+        return Ok(());
+    }
+    for line in ui::event_lines(&list) {
         println!("{line}");
     }
     Ok(())
