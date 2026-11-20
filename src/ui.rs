@@ -268,16 +268,50 @@ fn phase_rows(s: &Value) -> Vec<String> {
     vec![row("", "schedule", cells)]
 }
 
-/// `bedtime  1:45 AM · daily`.
+/// How long before bedtime the app turns the pod on ("Pod turns on: 1h
+/// before bedtime"). The API only stores the bedtime.
+const POD_ON_LEAD_HOURS: i64 = 1;
+
+/// `bedtime  1:45 AM · daily · warms up in 3h 23m`, the tail dimmed. It
+/// counts down to the pod turning on, and the verb compares the schedule's
+/// `now` level with the bed's current level: where the bed heads then.
 fn bedtime_row(s: &Value) -> Option<String> {
     let time = alarm::clock(s["bedtime"]["time"].as_str()?);
     let sep = " · ".dimmed().to_string();
-    let line = format!(
+    let mut line = format!(
         "{}{sep}{}",
         time.bold(),
         days_summary(&s["bedtime"]["days"])
     );
+    let next: Option<jiff::Timestamp> = s["next_bedtime"].as_str().and_then(|t| t.parse().ok());
+    if let Some(next) = next {
+        let (verb, verbing) = match (s["phases"][0]["scheduled"].as_i64(), s["level"].as_i64()) {
+            (Some(a), Some(b)) if a < b => ("cools down", "cooling down"),
+            (Some(a), Some(b)) if a > b => ("warms up", "warming up"),
+            _ => ("starts", "starting"),
+        };
+        let on_at = next - jiff::SignedDuration::from_hours(POD_ON_LEAD_HOURS);
+        let left = (on_at - jiff::Timestamp::now()).get_seconds();
+        let tail = if left > 0 {
+            format!("{verb} in {}", eta(left))
+        } else {
+            format!("{verbing} now")
+        };
+        line.push_str(&format!("{sep}{}", tail.dimmed()));
+    }
     Some(row("", "bedtime", line))
+}
+
+/// `8h 30m`, `45m`, `2d 3h`, `<1m`.
+fn eta(secs: i64) -> String {
+    let m = secs.max(0) / 60;
+    let (d, h, m) = (m / 1440, (m / 60) % 24, m % 60);
+    match (d, h, m) {
+        (0, 0, 0) => "<1m".into(),
+        (0, 0, m) => format!("{m}m"),
+        (0, h, m) => format!("{h}h {m}m"),
+        (d, h, _) => format!("{d}d {h}h"),
+    }
 }
 
 /// `now 55°F -10 (0) │ night 78°F -1 │ dawn 82°F 0`: each phase's
@@ -497,7 +531,16 @@ pub fn error(msg: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{CARET_ABOVE, CARET_BELOW, bar_label};
+    use super::{CARET_ABOVE, CARET_BELOW, bar_label, eta};
+
+    #[test]
+    fn formats_eta() {
+        assert_eq!(eta(30), "<1m");
+        assert_eq!(eta(45 * 60), "45m");
+        assert_eq!(eta(8 * 3600 + 30 * 60 + 59), "8h 30m");
+        assert_eq!(eta(2 * 86400 + 3 * 3600 + 120), "2d 3h");
+        assert_eq!(eta(-5), "<1m");
+    }
 
     /// Column of the caret once color codes are stripped.
     fn caret_col(line: &str) -> usize {
