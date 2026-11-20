@@ -741,7 +741,6 @@ fn setup(email: Option<String>, password: Option<String>, as_json: bool) -> Resu
         );
     } else {
         println!("{}", ui::ok(&format!("signed in as {email}")));
-        println!("saved to {} (only you can read it)", path.display());
         if device.is_none() {
             println!("no Pod on this account yet");
         }
