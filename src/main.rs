@@ -73,15 +73,38 @@ enum Cmd {
         #[arg(short, long)]
         number: Option<usize>,
     },
-    /// Show the schedule (bedtime and the now/night/dawn levels), change the
-    /// bedtime (11pm, 23:00) or its days, or turn the schedule on/off.
+    /// Show the schedule (bedtimes and the now/night/dawn levels), change a
+    /// bedtime (8:30pm, 23:00) or its days, or turn it on/off.
+    #[command(visible_alias = "bedtime", args_conflicts_with_subcommands = true)]
     Schedule {
-        /// A new bedtime (11pm, 10:30pm, 23:00), or on / off.
+        #[command(subcommand)]
+        sub: Option<ScheduleCmd>,
+        /// A new bedtime (8:30pm, 11pm, 23:00), or on / off.
         #[arg(value_parser = alarm::parse_action)]
         action: Option<alarm::Action>,
         /// Run on these days: weekdays, weekends, daily, or a list like mon,wed,fri.
         #[arg(long, value_parser = alarm::parse_days)]
         days: Option<Value>,
+        /// Which bedtime, by its number in `8sleep schedule`. Needed only when there's more than one.
+        #[arg(short, long)]
+        number: Option<usize>,
+    },
+}
+
+#[derive(Subcommand)]
+enum ScheduleCmd {
+    /// Add a bedtime (daily unless --days is given).
+    Add {
+        #[arg(value_parser = alarm::parse_time)]
+        time: String,
+        /// Run on these days: weekdays, weekends, daily, or a list like mon,wed,fri.
+        #[arg(long, value_parser = alarm::parse_days)]
+        days: Option<Value>,
+    },
+    /// Delete a bedtime by its number in `8sleep schedule`.
+    Rm {
+        #[arg(short, long)]
+        number: usize,
     },
 }
 
@@ -207,9 +230,24 @@ fn run(cli: Cli) -> Result<()> {
                 Some(AlarmCmd::Test { duration }) => alarm_test(&api, &user, duration, cli.json),
             }
         }
-        Cmd::Schedule { action, days } => {
+        Cmd::Schedule {
+            sub,
+            action,
+            days,
+            number,
+        } => {
             let user = target_user(&api, cli.side)?;
-            schedule_cmd(&api, &user, action, days, cli.json)
+            let edit = match sub {
+                Some(ScheduleCmd::Add { time, days }) => Some(ScheduleEdit::Add { time, days }),
+                Some(ScheduleCmd::Rm { number }) => Some(ScheduleEdit::Rm { number }),
+                None if action.is_some() || days.is_some() => Some(ScheduleEdit::Change {
+                    action,
+                    days,
+                    number,
+                }),
+                None => None,
+            };
+            schedule_cmd(&api, &user, edit, cli.json)
         }
     }
 }
@@ -253,55 +291,114 @@ fn alarm_cmd(
     print_alarms(&list_alarms(api, user)?, as_json, Some(&done))
 }
 
-/// The schedule's bedtime lives in `GET /temperature/pod` as `schedules` and
-/// is written back whole with `PUT /bedtime {"schedules": [...]}`. Phase
-/// levels come from `GET /temperature`.
-fn schedule_cmd(
-    api: &Api,
-    user: &str,
-    action: Option<alarm::Action>,
-    days: Option<Value>,
-    as_json: bool,
-) -> Result<()> {
+enum ScheduleEdit {
+    Change {
+        action: Option<alarm::Action>,
+        days: Option<Value>,
+        number: Option<usize>,
+    },
+    Add {
+        time: String,
+        days: Option<Value>,
+    },
+    Rm {
+        number: usize,
+    },
+}
+
+/// `weekDays`-style map -> the schedule API's list of day names.
+fn day_names(days: &Value) -> Value {
+    json!(
+        alarm::WEEKDAYS
+            .iter()
+            .filter(|w| days[**w].as_bool() == Some(true))
+            .collect::<Vec<_>>()
+    )
+}
+
+/// Bedtimes live in `GET /temperature/pod` as `schedules` and are written
+/// back as the whole list with `PUT /bedtime {"schedules": [...]}`; an entry
+/// without an `id` is a new one. Phase levels come from `GET /temperature`.
+fn schedule_cmd(api: &Api, user: &str, edit: Option<ScheduleEdit>, as_json: bool) -> Result<()> {
+    // Sorted by time of day so `-n` numbers stay put.
     let read = || -> Result<Vec<Value>> {
         let v = api.get(&format!("{APP_API}/users/{user}/temperature/pod"))?;
-        Ok(v["schedules"].as_array().cloned().unwrap_or_default())
+        let mut list = v["schedules"].as_array().cloned().unwrap_or_default();
+        list.sort_by(|a, b| a["time"].as_str().cmp(&b["time"].as_str()));
+        Ok(list)
     };
     let mut schedules = read()?;
+    let pick = |n: Option<usize>, len: usize| -> Result<usize> {
+        match (n, len) {
+            (Some(n), len) if (1..=len).contains(&n) => Ok(n - 1),
+            (Some(n), len) => bail!("there is no bedtime {n} (you have {len})"),
+            (None, 1) => Ok(0),
+            (None, 0) => bail!("no bedtime yet; add one with `8sleep schedule add 11pm`"),
+            (None, len) => {
+                bail!("you have {len} bedtimes; pick one with --number (see `8sleep schedule`)")
+            }
+        }
+    };
     let mut done = None;
-    if action.is_some() || days.is_some() {
-        let [s] = schedules.as_mut_slice() else {
-            bail!(
-                "expected one schedule, found {}; change it in the Eight Sleep app",
-                schedules.len()
-            );
+    if let Some(edit) = edit {
+        let msg = match edit {
+            ScheduleEdit::Change {
+                action,
+                days,
+                number,
+            } => {
+                let i = pick(number, schedules.len())?;
+                let s = &mut schedules[i];
+                let mut what = Vec::new();
+                match &action {
+                    Some(alarm::Action::Set(t)) => {
+                        s["time"] = json!(t);
+                        what.push(format!("set to {}", alarm::clock(t)));
+                    }
+                    Some(alarm::Action::Enable(on)) => {
+                        s["enabled"] = json!(on);
+                        what.push((if *on { "on" } else { "off" }).to_string());
+                    }
+                    None => {}
+                }
+                if let Some(d) = &days {
+                    s["days"] = day_names(d);
+                    what.push(format!("days: {}", ui::days_summary(d)));
+                }
+                format!("bedtime {}", what.join(", "))
+            }
+            ScheduleEdit::Add { time, days } => {
+                let days = match days {
+                    Some(d) => d,
+                    None => alarm::parse_days("daily").map_err(anyhow::Error::msg)?,
+                };
+                schedules.push(json!({
+                    "enabled": true,
+                    "time": time,
+                    "days": day_names(&days),
+                    "tags": [],
+                    "startSettings": {},
+                }));
+                format!(
+                    "added a {} bedtime, {}",
+                    alarm::clock(&time),
+                    ui::days_summary(&days)
+                )
+            }
+            ScheduleEdit::Rm { number } => {
+                let i = pick(Some(number), schedules.len())?;
+                let gone = schedules.remove(i);
+                format!(
+                    "deleted the {} bedtime",
+                    alarm::clock(gone["time"].as_str().unwrap_or("?"))
+                )
+            }
         };
-        let mut what = Vec::new();
-        match &action {
-            Some(alarm::Action::Set(t)) => {
-                s["time"] = json!(t);
-                what.push(format!("bedtime {}", alarm::clock(t)));
-            }
-            Some(alarm::Action::Enable(on)) => {
-                s["enabled"] = json!(on);
-                what.push((if *on { "on" } else { "off" }).to_string());
-            }
-            None => {}
-        }
-        if let Some(d) = &days {
-            let names: Vec<&str> = alarm::WEEKDAYS
-                .iter()
-                .copied()
-                .filter(|w| d[*w].as_bool() == Some(true))
-                .collect();
-            s["days"] = json!(names);
-            what.push(format!("days: {}", ui::days_summary(d)));
-        }
         api.put(
             &format!("{APP_API}/users/{user}/bedtime"),
             json!({ "schedules": schedules }),
         )?;
-        done = Some(format!("schedule {}", what.join(", ")));
+        done = Some(msg);
         schedules = read()?;
     }
     let shown: Vec<Value> = schedules

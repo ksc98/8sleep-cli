@@ -93,7 +93,7 @@ impl Api {
             }
             let text = resp.text()?;
             if !status.is_success() {
-                bail!("{method} {url} failed ({status}): {text}");
+                bail!("{} ({status}, {method} {url})", server_message(&text));
             }
             if text.trim().is_empty() {
                 return Ok(Value::Null);
@@ -101,5 +101,55 @@ impl Api {
             return serde_json::from_str(&text)
                 .with_context(|| format!("{method} {url}: response is not JSON"));
         }
+    }
+}
+
+/// The human part of an error body: a bare JSON string, `message`, or a
+/// validation `title` with its field errors. Falls back to the raw text.
+fn server_message(text: &str) -> String {
+    let Ok(v) = serde_json::from_str::<Value>(text) else {
+        return text.trim().to_string();
+    };
+    if let Some(s) = v.as_str() {
+        return s.to_string();
+    }
+    if let Some(m) = v["message"].as_str() {
+        return m.to_string();
+    }
+    if let Some(t) = v["title"].as_str() {
+        let fields: Vec<String> = v["errors"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .flat_map(|(_, msgs)| msgs.as_array().cloned().unwrap_or_default())
+            .filter_map(|m| m.as_str().map(str::to_owned))
+            .collect();
+        return if fields.is_empty() {
+            t.to_string()
+        } else {
+            format!("{t} {}", fields.join(" "))
+        };
+    }
+    text.trim().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::server_message;
+
+    #[test]
+    fn extracts_server_messages() {
+        assert_eq!(
+            server_message(r#""Bedtime schedules must be at least 16 hours apart.""#),
+            "Bedtime schedules must be at least 16 hours apart."
+        );
+        assert_eq!(server_message(r#"{"message":"nope"}"#), "nope");
+        assert_eq!(
+            server_message(
+                r#"{"title":"One or more validation errors occurred.","errors":{"Schedules":["The Schedules field is required."]}}"#
+            ),
+            "One or more validation errors occurred. The Schedules field is required."
+        );
+        assert_eq!(server_message("<html>404</html>"), "<html>404</html>");
     }
 }

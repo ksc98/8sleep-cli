@@ -9,9 +9,11 @@ Command-line control for an Eight Sleep Pod.
 8sleep temp -3                 # app scale (-10..+10)
 8sleep away on | off
 8sleep prime
-8sleep schedule                # bedtime and the now / night / dawn levels
-8sleep schedule 11pm [--days weekdays|weekends|daily|mon,wed]
-8sleep schedule on | off
+8sleep schedule                # bedtimes and the now / night / dawn levels (`bedtime` works too)
+8sleep bedtime 8:30pm [--days weekdays|weekends|daily|mon,wed]
+8sleep bedtime on | off
+8sleep bedtime add 1am --days sat,sun
+8sleep bedtime rm -n 2
 8sleep alarm                   # list alarms (`alarms` works too)
 8sleep alarm 8:30pm            # set the alarm time (also 7am, 20:30)
 8sleep alarm on | off
@@ -21,8 +23,10 @@ Command-line control for an Eight Sleep Pod.
 ```
 
 `--side left|right|solo` targets whoever is assigned to that side. Without it,
-commands act on your own account. With several alarms, `-n 2` picks one by
-its number in `8sleep alarm` (sorted by time of day). `--json` prints JSON. Color is off when
+commands act on your own account. With several alarms or bedtimes, `-n 2`
+picks one by its number in the list (sorted by time of day). Eight Sleep
+requires bedtimes to be at least 16 hours apart, so two daily bedtimes
+can't coexist. `--json` prints JSON. Color is off when
 output is piped or `NO_COLOR` is set.
 
 ## Install

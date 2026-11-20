@@ -241,23 +241,29 @@ pub fn schedule_block(bedtimes: &[Value], phases: &Value, autopilot: bool) -> Ve
     if bedtimes.is_empty() {
         out.push(row("", "bedtime", "none".dimmed()));
     }
-    for b in bedtimes {
+    for (i, b) in bedtimes.iter().enumerate() {
         let on = b["enabled"].as_bool() == Some(true);
         let power = if on {
             format!("{} {}", "●".green(), "on ".green().bold())
         } else {
             format!("{} {}", "○".dimmed(), "off".dimmed())
         };
-        let time = alarm::clock(b["time"].as_str().unwrap_or("?"));
+        // Pad before coloring: escape codes would count toward the width.
+        let time = format!("{:>8}", alarm::clock(b["time"].as_str().unwrap_or("?")));
         let time = if on {
             time.bold().to_string()
         } else {
             time.dimmed().to_string()
         };
+        let label = if i == 0 { "bedtime" } else { "" };
         out.push(row(
             "",
-            "bedtime",
-            format!("{power}  {time}  {}", days_summary(&b["days"])),
+            label,
+            format!(
+                "{}  {power}  {time}  {}",
+                (i + 1).dimmed(),
+                days_summary(&b["days"])
+            ),
         ));
     }
     let (cells, mut notes) = phase_cells(phases);
