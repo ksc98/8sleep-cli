@@ -238,7 +238,7 @@ pub fn side_block(title: &str, you: bool, s: &Value) -> Vec<String> {
     lines
 }
 
-/// The smart schedule on one line: `now · night · dawn` (the running phase
+/// The smart schedule on one line: `now │ night │ dawn` (the running phase
 /// marked), then when it next starts and whether Autopilot is adjusting it.
 fn phase_rows(s: &Value) -> Vec<String> {
     let cells = phase_cells(&s["phases"]);
@@ -300,7 +300,7 @@ fn eta(secs: i64) -> String {
     }
 }
 
-/// `now 55°F -10 (0) · night 78°F -1 · dawn 82°F 0`: each phase's
+/// `now 55°F -10 (0) │ night 78°F -1 │ dawn 82°F 0`: each phase's
 /// level, with the saved one in parentheses when it was set by hand.
 fn phase_cells(phases: &Value) -> String {
     let mut cells = Vec::new();
@@ -326,7 +326,7 @@ fn phase_cells(phases: &Value) -> String {
         }
         cells.push(cell);
     }
-    cells.join(&" · ".dimmed().to_string())
+    cells.join(&" │ ".dimmed().to_string())
 }
 
 /// `8sleep schedule`: when it turns the bed on, then the level for each phase.
