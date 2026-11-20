@@ -21,6 +21,8 @@ pub const HELP_STYLES: Styles = Styles::styled()
 const GAUGE_CELLS: i32 = 41; // one cell per half step of the app's -10..=+10 scale
 const TARGET_MARK: &str = "◆";
 const NOW_MARK: &str = "●";
+/// Connects a bar label to its marker.
+const TICK: &str = "│";
 
 const COOL: (f64, f64, f64) = (80.0, 150.0, 255.0);
 const NEUTRAL: (f64, f64, f64) = (200.0, 200.0, 200.0);
@@ -80,8 +82,9 @@ const ROW_INDENT: usize = 4 + LABEL_WIDTH;
 /// `cool ` before the first gauge cell.
 const GAUGE_LEAD: usize = 5;
 
-/// `target 81°F 0` starting at `col`, directly over (or under) its marker on
-/// the bar. Ends at `col` instead when it would run past `end`.
+/// `│ target 81°F 0` with the tick at `col`, directly over (or under) its
+/// marker on the bar. Near the warm end it flips to `target 81°F 0 │` so it
+/// doesn't run past `end`.
 fn bar_label(name: &str, raw: i32, bold: bool, precise: bool, col: usize, end: usize) -> String {
     let f = format!("{}°F", temp::raw_to_f(raw));
     let app = if precise {
@@ -93,19 +96,22 @@ fn bar_label(name: &str, raw: i32, bold: bool, precise: bool, col: usize, end: u
         .iter()
         .map(|p| p.chars().count())
         .sum::<usize>()
-        + 2;
+        + 4;
     let fc = if bold {
         colored_level(&f, raw).bold().to_string()
     } else {
         colored_level(&f, raw)
     };
     let text = format!("{} {fc} {}", name.dimmed(), app.dimmed());
-    let start = if col + width <= end {
-        col
+    let tick = TICK.dimmed();
+    if col + width <= end {
+        format!("{}{tick} {text}", " ".repeat(col))
     } else {
-        (col + 1).saturating_sub(width)
-    };
-    format!("{}{text}", " ".repeat(start))
+        format!(
+            "{}{text} {tick}",
+            " ".repeat((col + 1).saturating_sub(width))
+        )
+    }
 }
 
 /// `  ◆ target   81°F`: an optional bar marker, a dimmed label, the value.
@@ -486,7 +492,39 @@ pub fn error(msg: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::eta;
+    use super::{TICK, bar_label, eta};
+
+    /// Column of the tick once color codes are stripped.
+    fn tick_col(line: &str) -> usize {
+        let plain = String::from_utf8(strip_ansi(line.as_bytes())).unwrap();
+        plain.chars().position(|c| c.to_string() == TICK).unwrap()
+    }
+
+    fn strip_ansi(b: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i < b.len() {
+            if b[i] == 0x1b {
+                while i < b.len() && b[i] != b'm' {
+                    i += 1;
+                }
+            } else {
+                out.push(b[i]);
+            }
+            i += 1;
+        }
+        out
+    }
+
+    #[test]
+    fn label_tick_sits_on_its_marker() {
+        // Room to the right: tick first, at the marker's column.
+        assert_eq!(tick_col(&bar_label("target", 0, true, false, 30, 70)), 30);
+        // Near the warm end the label flips left; the tick stays on the marker.
+        let flipped = bar_label("target", 100, true, false, 65, 70);
+        assert_eq!(tick_col(&flipped), 65);
+        assert!(strip_ansi(flipped.as_bytes()).ends_with(TICK.as_bytes()));
+    }
 
     #[test]
     fn formats_eta() {
