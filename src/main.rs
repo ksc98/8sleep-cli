@@ -43,17 +43,21 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Show power, temperature, away mode and water for the bed.
+    /// Show the bed
     Status {
         /// Keep refreshing in place until Ctrl-C, every 5s or the given interval (e.g. --live 10s).
         #[arg(long, num_args = 0..=1, default_missing_value = "5s", value_parser = humantime::parse_duration)]
         live: Option<std::time::Duration>,
     },
-    /// Turn on (resumes the smart schedule).
+    /// Turn on
+    ///
+    /// Resumes the smart schedule.
     On,
-    /// Turn off.
+    /// Turn off
     Off,
-    /// Set temperature: °F (55-111, e.g. 68) or the app's -10..+10 scale (e.g. -3).
+    /// Set the temperature
+    ///
+    /// °F (55-111, e.g. 68) or the app's -10..+10 scale (e.g. -3).
     ///
     /// While the bed is on, this changes the live target. While it's off, it
     /// saves the level in the schedule's `now` phase and leaves the bed off,
@@ -68,13 +72,15 @@ enum Cmd {
         #[arg(long)]
         apply: bool,
     },
-    /// Turn away mode on or off.
+    /// Away mode on/off
     Away {
         #[arg(value_enum)]
         state: Toggle,
     },
-    /// Start priming the water tank.
+    /// Prime the water tank
     Prime,
+    /// Manage alarms
+    ///
     /// List alarms, set an alarm's time (8:30pm, 7am, 20:30), or turn it on/off.
     #[command(visible_alias = "alarms", args_conflicts_with_subcommands = true)]
     Alarm {
@@ -87,6 +93,8 @@ enum Cmd {
         #[arg(short, long)]
         number: Option<usize>,
     },
+    /// Manage the bedtime schedule
+    ///
     /// Show the schedule (bedtimes and the now/night/dawn levels), change a
     /// bedtime (8:30pm, 23:00) or its days, or turn it on/off.
     #[command(visible_alias = "bedtime", args_conflicts_with_subcommands = true)]
