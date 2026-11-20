@@ -50,6 +50,25 @@ pub fn summary(day: &Value) -> Value {
             json!([lo, hi])
         }
     };
+    let avg = |v: Vec<f64>| -> Value {
+        if v.is_empty() {
+            Value::Null
+        } else {
+            json!(v.iter().sum::<f64>() / v.len() as f64)
+        }
+    };
+    let low = |v: Vec<f64>| -> Value {
+        v.into_iter()
+            .reduce(f64::min)
+            .map_or(Value::Null, |x| json!(x))
+    };
+    let efficiency = match (
+        day["sleepDuration"].as_f64(),
+        day["presenceDuration"].as_f64(),
+    ) {
+        (Some(s), Some(p)) if p > 0.0 => json!(s / p),
+        _ => Value::Null,
+    };
     json!({
         "day": day["day"],
         "in_bed": [day["presenceStart"], day["presenceEnd"]],
@@ -66,6 +85,12 @@ pub fn summary(day: &Value) -> Value {
         "awake_secs": day["wasoDuration"],
         "wakeups": day["wakeupCount"],
         "score": { "fitness": day["score"], "quality": q["total"], "routine": r["total"] },
+        "efficiency": efficiency,
+        // Plain statistics of the 5-minute series, comparable with other
+        // trackers, beside Eight Sleep's own nightly figures.
+        "heart_avg": avg(series("heartRate")),
+        "heart_lowest": low(series("heartRate")),
+        "rmssd_avg": avg(series("rmssd")),
         "heart_rate": q["heartRate"]["current"],
         "hrv": q["hrv"]["current"],
         "breathing_rate": q["respiratoryRate"]["current"],
@@ -111,6 +136,9 @@ pub fn lines(n: &Value) -> Vec<String> {
             let w = n["wakeups"].as_i64().unwrap_or(0);
             format!("awake {d}, {w} wakeup{}", if w == 1 { "" } else { "s" })
         }),
+        n["efficiency"]
+            .as_f64()
+            .map(|e| format!("efficiency {:.0}%", e * 100.0)),
     ]
     .into_iter()
     .flatten()
@@ -147,8 +175,16 @@ pub fn lines(n: &Value) -> Vec<String> {
     row(
         "heart",
         join([
-            num(&n["heart_rate"]).map(|v| format!("{v} bpm")),
-            num(&n["hrv"]).map(|v| format!("HRV {v} ms")),
+            n["heart_avg"].as_f64().map(|v| format!("avg {v:.0}")),
+            num(&n["heart_lowest"]).map(|v| format!("lowest {v} bpm")),
+            num(&n["heart_rate"]).map(|v| format!("{}", format!("Eight Sleep {v}").dimmed())),
+        ]),
+    );
+    row(
+        "HRV",
+        join([
+            n["rmssd_avg"].as_f64().map(|v| format!("avg {v:.0} ms")),
+            num(&n["hrv"]).map(|v| format!("{}", format!("Eight Sleep {v}").dimmed())),
         ]),
     );
     row(
@@ -244,7 +280,7 @@ mod tests {
         assert_eq!(n["bed_c"], json!([26.0, 29.5]));
         assert_eq!(n["room_c"], Value::Null);
         let text = lines(&n).join("\n");
-        assert!(text.contains("44.6 bpm"), "{text}");
+        assert!(text.contains("Eight Sleep 44.6"), "{text}");
         assert!(text.contains("79–85°F"), "{text}");
         assert!(text.contains("none"), "{text}");
         assert_eq!(
