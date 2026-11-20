@@ -21,8 +21,10 @@ pub const HELP_STYLES: Styles = Styles::styled()
 const GAUGE_CELLS: i32 = 41; // one cell per half step of the app's -10..=+10 scale
 const TARGET_MARK: &str = "◆";
 const NOW_MARK: &str = "●";
-/// Connects a bar label to its marker.
-const TICK: &str = "│";
+/// Half-height ticks joining a label to its marker: `╷` hangs from a label
+/// above the bar, `╵` rises to one below it.
+const TICK_ABOVE: &str = "╷";
+const TICK_BELOW: &str = "╵";
 
 const COOL: (f64, f64, f64) = (80.0, 150.0, 255.0);
 const NEUTRAL: (f64, f64, f64) = (200.0, 200.0, 200.0);
@@ -82,10 +84,18 @@ const ROW_INDENT: usize = 4 + LABEL_WIDTH;
 /// `cool ` before the first gauge cell.
 const GAUGE_LEAD: usize = 5;
 
-/// `│ target 81°F 0` with the tick at `col`, directly over (or under) its
+/// `╷ target 81°F 0` with the tick at `col`, directly over (or under) its
 /// marker on the bar. Near the warm end it flips to `target 81°F 0 │` so it
 /// doesn't run past `end`.
-fn bar_label(name: &str, raw: i32, bold: bool, precise: bool, col: usize, end: usize) -> String {
+fn bar_label(
+    name: &str,
+    raw: i32,
+    bold: bool,
+    precise: bool,
+    tick: &str,
+    col: usize,
+    end: usize,
+) -> String {
     let f = format!("{}°F", temp::raw_to_f(raw));
     let app = if precise {
         temp::raw_to_app_precise(raw)
@@ -103,7 +113,7 @@ fn bar_label(name: &str, raw: i32, bold: bool, precise: bool, col: usize, end: u
         colored_level(&f, raw)
     };
     let text = format!("{} {fc} {}", name.dimmed(), app.dimmed());
-    let tick = TICK.dimmed();
+    let tick = tick.dimmed();
     if col + width <= end {
         format!("{}{tick} {text}", " ".repeat(col))
     } else {
@@ -193,10 +203,18 @@ pub fn side_block(title: &str, you: bool, s: &Value) -> Vec<String> {
         let cell0 = ROW_INDENT + GAUGE_LEAD;
         let end = cell0 + GAUGE_CELLS as usize + GAUGE_LEAD;
         let col = |raw| cell0 + gauge_cell(raw) as usize;
-        lines.push(bar_label("target", t, true, false, col(t), end));
+        lines.push(bar_label("target", t, true, false, TICK_ABOVE, col(t), end));
         lines.push(row("", "", gauge(t, now, on)));
         if let Some(n) = now {
-            lines.push(bar_label("current", n, false, true, col(n), end));
+            lines.push(bar_label(
+                "current",
+                n,
+                false,
+                true,
+                TICK_BELOW,
+                col(n),
+                end,
+            ));
         }
     }
     lines.extend(phase_rows(s));
@@ -492,12 +510,15 @@ pub fn error(msg: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{TICK, bar_label, eta};
+    use super::{TICK_ABOVE, TICK_BELOW, bar_label, eta};
 
     /// Column of the tick once color codes are stripped.
     fn tick_col(line: &str) -> usize {
         let plain = String::from_utf8(strip_ansi(line.as_bytes())).unwrap();
-        plain.chars().position(|c| c.to_string() == TICK).unwrap()
+        plain
+            .chars()
+            .position(|c| [TICK_ABOVE, TICK_BELOW].contains(&c.to_string().as_str()))
+            .unwrap()
     }
 
     fn strip_ansi(b: &[u8]) -> Vec<u8> {
@@ -519,11 +540,14 @@ mod tests {
     #[test]
     fn label_tick_sits_on_its_marker() {
         // Room to the right: tick first, at the marker's column.
-        assert_eq!(tick_col(&bar_label("target", 0, true, false, 30, 70)), 30);
+        assert_eq!(
+            tick_col(&bar_label("target", 0, true, false, TICK_ABOVE, 30, 70)),
+            30
+        );
         // Near the warm end the label flips left; the tick stays on the marker.
-        let flipped = bar_label("target", 100, true, false, 65, 70);
+        let flipped = bar_label("current", 100, false, true, TICK_BELOW, 65, 70);
         assert_eq!(tick_col(&flipped), 65);
-        assert!(strip_ansi(flipped.as_bytes()).ends_with(TICK.as_bytes()));
+        assert!(strip_ansi(flipped.as_bytes()).ends_with(TICK_BELOW.as_bytes()));
     }
 
     #[test]
