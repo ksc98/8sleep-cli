@@ -2,8 +2,6 @@ mod api;
 mod auth;
 mod temp;
 
-use std::time::Duration;
-
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand, ValueEnum};
 use serde_json::{Value, json};
@@ -35,9 +33,6 @@ enum Cmd {
     Temp {
         #[arg(allow_negative_numbers = true, value_parser = temp::parse)]
         value: i32,
-        /// Hold for this long, then return to the schedule (e.g. 90m, 2h).
-        #[arg(long = "for", value_parser = humantime::parse_duration)]
-        duration: Option<Duration>,
     },
     /// Turn away mode on or off.
     Away {
@@ -97,24 +92,16 @@ fn run(cli: Cli) -> Result<()> {
             set_state(&mut api, &user, "off")?;
             print_side(&mut api, &user, cli.json)
         }
-        Cmd::Temp { value, duration } => {
+        Cmd::Temp { value } => {
             let user = target_user(&mut api, cli.side)?;
             let url = format!("{APP_API}/users/{user}/temperature");
             let cur = api.get(&url)?;
             if state_type(&cur) == "off" {
                 set_state(&mut api, &user, "smart")?;
             }
+            // In smart mode this overrides the current phase's level
+            // (overrideLevels.<phase>); `on` after `off` drops the override.
             api.put(&url, json!({ "currentLevel": value }))?;
-            if let Some(d) = duration {
-                let secs = d.as_secs();
-                if secs == 0 {
-                    bail!("--for must be at least one second");
-                }
-                api.put(
-                    &url,
-                    json!({ "timeBased": { "level": value, "durationSeconds": secs } }),
-                )?;
-            }
             print_side(&mut api, &user, cli.json)
         }
         Cmd::Away { state } => {

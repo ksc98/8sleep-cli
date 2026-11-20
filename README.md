@@ -7,7 +7,6 @@ Command-line control for an Eight Sleep Pod.
 8sleep on | off
 8sleep temp 68                 # °F (55-111)
 8sleep temp -3                 # app scale (-10..+10)
-8sleep temp 70 --for 90m       # hold, then return to the schedule
 8sleep away on | off
 8sleep prime
 8sleep side [solo|left|right]  # show or change your side assignment
