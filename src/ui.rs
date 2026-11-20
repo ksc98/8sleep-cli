@@ -20,7 +20,9 @@ pub const HELP_STYLES: Styles = Styles::styled()
 
 const GAUGE_CELLS: i32 = 41; // one cell per half step of the app's -10..=+10 scale
 const TARGET_MARK: &str = "◆";
-const NOW_MARK: &str = "●";
+/// Nerd Font `cod-circle_filled`: the same size as `TARGET_MARK` on the bar,
+/// where `●` draws noticeably bigger than `◆`.
+const NOW_MARK: &str = "\u{ea71}";
 /// Chevrons pointing from a label to its marker: Nerd Font `md-chevron_down`
 /// from a label above the bar, `md-chevron_up` from one below it. They need
 /// a Nerd Font; Ghostty on both of the user's machines uses JetBrainsMono NF.
@@ -54,7 +56,7 @@ fn gauge_cell(raw: i32) -> i32 {
 }
 
 /// A cool→warm bar marking the target (◆) and, when known, the current
-/// level (●). While the bed is on, the stretch between them is drawn heavy to
+/// level (`NOW_MARK`). While the bed is on, the stretch between them is drawn heavy to
 /// show which way it's heading; when it's off nothing is heading anywhere.
 fn gauge(target: i32, now: Option<i32>, on: bool) -> String {
     let t = gauge_cell(target);
@@ -266,56 +268,16 @@ fn phase_rows(s: &Value) -> Vec<String> {
     vec![row("", "schedule", cells)]
 }
 
-/// How long before bedtime the app turns the pod on ("Pod turns on: 1h
-/// before bedtime"). The API only stores the bedtime.
-const POD_ON_LEAD_HOURS: i64 = 1;
-
-/// `bedtime  1:45 AM · daily · cools at 12:45 AM · 6h 40m`. The verb
-/// compares the schedule's `now` level with the bed's current level: that's
-/// where the bed heads when the pod turns on.
+/// `bedtime  1:45 AM · daily`.
 fn bedtime_row(s: &Value) -> Option<String> {
     let time = alarm::clock(s["bedtime"]["time"].as_str()?);
-    let start = s["phases"][0]["scheduled"].as_i64();
-    let current = s["level"].as_i64();
-    let verb = match (start, current) {
-        (Some(a), Some(b)) if a < b => "cools",
-        (Some(a), Some(b)) if a > b => "warms",
-        _ => "starts",
-    };
     let sep = " · ".dimmed().to_string();
-    let mut line = format!(
+    let line = format!(
         "{}{sep}{}",
         time.bold(),
         days_summary(&s["bedtime"]["days"])
     );
-    let next: Option<jiff::Timestamp> = s["next_bedtime"].as_str().and_then(|t| t.parse().ok());
-    if let Some(next) = next {
-        let on_at = next - jiff::SignedDuration::from_hours(POD_ON_LEAD_HOURS);
-        let now = jiff::Timestamp::now();
-        let clock = on_at
-            .to_zoned(jiff::tz::TimeZone::system())
-            .strftime("%-I:%M %p")
-            .to_string();
-        let tail = if on_at <= now {
-            format!("{verb} now, since {clock}")
-        } else {
-            format!("{verb} at {clock}{sep}{}", eta((on_at - now).get_seconds()))
-        };
-        line.push_str(&format!("{sep}{}", tail.dimmed()));
-    }
     Some(row("", "bedtime", line))
-}
-
-/// `8h 30m`, `45m`, `2d 3h`, `<1m`.
-fn eta(secs: i64) -> String {
-    let m = secs.max(0) / 60;
-    let (d, h, m) = (m / 1440, (m / 60) % 24, m % 60);
-    match (d, h, m) {
-        (0, 0, 0) => "<1m".into(),
-        (0, 0, m) => format!("{m}m"),
-        (0, h, m) => format!("{h}h {m}m"),
-        (d, h, _) => format!("{d}d {h}h"),
-    }
 }
 
 /// `now 55°F -10 (0) │ night 78°F -1 │ dawn 82°F 0`: each phase's
@@ -535,7 +497,7 @@ pub fn error(msg: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{CARET_ABOVE, CARET_BELOW, bar_label, eta};
+    use super::{CARET_ABOVE, CARET_BELOW, bar_label};
 
     /// Column of the caret once color codes are stripped.
     fn caret_col(line: &str) -> usize {
@@ -573,14 +535,5 @@ mod tests {
         let flipped = bar_label("current", 100, false, true, CARET_BELOW, 65, 70);
         assert_eq!(caret_col(&flipped), 65);
         assert!(strip_ansi(flipped.as_bytes()).ends_with(CARET_BELOW.as_bytes()));
-    }
-
-    #[test]
-    fn formats_eta() {
-        assert_eq!(eta(30), "<1m");
-        assert_eq!(eta(45 * 60), "45m");
-        assert_eq!(eta(8 * 3600 + 30 * 60 + 59), "8h 30m");
-        assert_eq!(eta(2 * 86400 + 3 * 3600 + 120), "2d 3h");
-        assert_eq!(eta(-5), "<1m");
     }
 }
