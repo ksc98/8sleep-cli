@@ -5,15 +5,19 @@ use reqwest::Method;
 use reqwest::blocking::Client;
 use serde_json::Value;
 
-use crate::auth::{self, Token};
+use std::sync::Mutex;
+
+use crate::auth;
 
 pub const CLIENT_API: &str = "https://client-api.8slp.net/v1";
 pub const APP_API: &str = "https://app-api.8slp.net/v1";
 pub const APP_API_V2: &str = "https://app-api.8slp.net/v2";
 
+/// Shared across threads so independent reads can run concurrently.
 pub struct Api {
     http: Client,
-    token: Token,
+    user_id: String,
+    access_token: Mutex<String>,
 }
 
 impl Api {
@@ -25,32 +29,53 @@ impl Api {
             .timeout(std::time::Duration::from_secs(20))
             .build()?;
         let token = auth::token(&http, false)?;
-        Ok(Self { http, token })
+        Ok(Self {
+            http,
+            user_id: token.user_id,
+            access_token: Mutex::new(token.access_token),
+        })
     }
 
     pub fn user_id(&self) -> &str {
-        &self.token.user_id
+        &self.user_id
     }
 
-    pub fn get(&mut self, url: &str) -> Result<Value> {
+    pub fn get(&self, url: &str) -> Result<Value> {
         self.request(Method::GET, url, None)
     }
 
-    pub fn put(&mut self, url: &str, body: Value) -> Result<Value> {
+    pub fn put(&self, url: &str, body: Value) -> Result<Value> {
         self.request(Method::PUT, url, Some(body))
     }
 
-    pub fn post(&mut self, url: &str, body: Value) -> Result<Value> {
+    pub fn post(&self, url: &str, body: Value) -> Result<Value> {
         self.request(Method::POST, url, Some(body))
     }
 
-    fn request(&mut self, method: Method, url: &str, body: Option<Value>) -> Result<Value> {
+    fn token(&self) -> String {
+        self.access_token
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// Refresh after a 401, unless another thread already replaced `stale`.
+    fn refresh(&self, stale: &str) -> Result<()> {
+        let mut cur = self.access_token.lock().unwrap_or_else(|e| e.into_inner());
+        if *cur == stale {
+            *cur = auth::token(&self.http, true)?.access_token;
+        }
+        Ok(())
+    }
+
+    fn request(&self, method: Method, url: &str, body: Option<Value>) -> Result<Value> {
         let mut retried = false;
         loop {
+            let token = self.token();
             let mut req = self
                 .http
                 .request(method.clone(), url)
-                .bearer_auth(&self.token.access_token)
+                .bearer_auth(&token)
                 .header("accept", "application/json");
             if let Some(b) = &body {
                 req = req.json(b);
@@ -58,7 +83,7 @@ impl Api {
             let resp = req.send().with_context(|| format!("{method} {url}"))?;
             let status = resp.status();
             if status == reqwest::StatusCode::UNAUTHORIZED && !retried {
-                self.token = auth::token(&self.http, true)?;
+                self.refresh(&token)?;
                 retried = true;
                 continue;
             }

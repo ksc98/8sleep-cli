@@ -97,25 +97,25 @@ fn main() {
 }
 
 fn run(cli: Cli) -> Result<()> {
-    let mut api = Api::new()?;
+    let api = Api::new()?;
     match cli.cmd.unwrap_or(Cmd::Status) {
-        Cmd::Status => status(&mut api, cli.json),
+        Cmd::Status => status(&api, cli.json),
         Cmd::On => {
-            let user = target_user(&mut api, cli.side)?;
-            set_state(&mut api, &user, "smart")?;
-            print_side(&mut api, &user, cli.json, "turned on")
+            let user = target_user(&api, cli.side)?;
+            set_state(&api, &user, "smart")?;
+            print_side(&api, &user, cli.json, "turned on")
         }
         Cmd::Off => {
-            let user = target_user(&mut api, cli.side)?;
-            set_state(&mut api, &user, "off")?;
-            print_side(&mut api, &user, cli.json, "turned off")
+            let user = target_user(&api, cli.side)?;
+            set_state(&api, &user, "off")?;
+            print_side(&api, &user, cli.json, "turned off")
         }
         Cmd::Temp { value } => {
-            let user = target_user(&mut api, cli.side)?;
+            let user = target_user(&api, cli.side)?;
             let url = format!("{APP_API}/users/{user}/temperature");
             let cur = api.get(&url)?;
             if state_type(&cur) == "off" {
-                set_state(&mut api, &user, "smart")?;
+                set_state(&api, &user, "smart")?;
             }
             // In smart mode this overrides the current phase's level
             // (overrideLevels.<phase>); `on` after `off` drops the override.
@@ -125,10 +125,10 @@ fn run(cli: Cli) -> Result<()> {
                 temp::raw_to_f(value),
                 temp::raw_to_app_precise(value)
             );
-            print_side(&mut api, &user, cli.json, &msg)
+            print_side(&api, &user, cli.json, &msg)
         }
         Cmd::Away { state } => {
-            let user = target_user(&mut api, cli.side)?;
+            let user = target_user(&api, cli.side)?;
             // Backdated a day as upstream does: it reports the away period only
             // applies immediately with a past timestamp.
             let ts = (jiff::Timestamp::now() - jiff::SignedDuration::from_hours(24))
@@ -146,10 +146,10 @@ fn run(cli: Cli) -> Result<()> {
                 Toggle::On => "away mode on",
                 Toggle::Off => "away mode off",
             };
-            print_side(&mut api, &user, cli.json, msg)
+            print_side(&api, &user, cli.json, msg)
         }
         Cmd::Prime => {
-            let me = me(&mut api)?;
+            let me = me(&api)?;
             let uid = api.user_id().to_owned();
             api.post(
                 &format!("{APP_API}/devices/{}/priming/tasks", me.device_id),
@@ -163,7 +163,7 @@ fn run(cli: Cli) -> Result<()> {
             Ok(())
         }
         Cmd::Side { side } => {
-            let me = me(&mut api)?;
+            let me = me(&api)?;
             let side = match side {
                 None => me.side,
                 Some(s) => {
@@ -190,7 +190,7 @@ struct Me {
     side: String,
 }
 
-fn me(api: &mut Api) -> Result<Me> {
+fn me(api: &Api) -> Result<Me> {
     let v = api.get(&format!("{CLIENT_API}/users/me"))?;
     let dev = &v["user"]["currentDevice"];
     Ok(Me {
@@ -202,13 +202,13 @@ fn me(api: &mut Api) -> Result<Me> {
     })
 }
 
-fn device(api: &mut Api, id: &str) -> Result<Value> {
+fn device(api: &Api, id: &str) -> Result<Value> {
     Ok(api.get(&format!("{CLIENT_API}/devices/{id}"))?["result"].take())
 }
 
 /// The user whose temperature a command changes. Temperature is per user, so
 /// `--side` picks whoever is assigned to that side of the bed.
-fn target_user(api: &mut Api, side: Option<Side>) -> Result<String> {
+fn target_user(api: &Api, side: Option<Side>) -> Result<String> {
     let Some(side) = side else {
         return Ok(api.user_id().to_owned());
     };
@@ -227,7 +227,7 @@ fn target_user(api: &mut Api, side: Option<Side>) -> Result<String> {
     Ok(user.to_owned())
 }
 
-fn set_state(api: &mut Api, user: &str, state: &str) -> Result<()> {
+fn set_state(api: &Api, user: &str, state: &str) -> Result<()> {
     api.put(
         &format!("{APP_API}/users/{user}/temperature"),
         json!({ "currentState": { "type": state } }),
@@ -240,12 +240,23 @@ fn state_type(temp: &Value) -> &str {
 }
 
 /// One user's temperature and away state as a JSON object.
-fn side_info(api: &mut Api, user: &str) -> Result<Value> {
-    let t = api.get(&format!("{APP_API}/users/{user}/temperature"))?;
-    let away = api.get(&format!("{APP_API}/users/{user}/away-mode"))?;
-    let autopilot = api.get(&format!("{APP_API}/users/{user}/autopilotDetails"))?;
+fn side_info(api: &Api, user: &str) -> Result<Value> {
+    // Independent reads, fetched concurrently: each is a full API round trip.
+    let (t, away, autopilot, alarms) = std::thread::scope(|sc| {
+        let get = |url: String| sc.spawn(move || api.get(&url));
+        let t = get(format!("{APP_API}/users/{user}/temperature"));
+        let away = get(format!("{APP_API}/users/{user}/away-mode"));
+        let autopilot = get(format!("{APP_API}/users/{user}/autopilotDetails"));
+        let alarms = get(format!("{APP_API_V2}/users/{user}/alarms"));
+        let join = |h: std::thread::ScopedJoinHandle<'_, Result<Value>>| {
+            h.join()
+                .unwrap_or_else(|_| bail!("request thread panicked"))
+        };
+        (join(t), join(away), join(autopilot), join(alarms))
+    });
+    let (t, away, autopilot) = (t?, away?, autopilot?);
     // Accounts without a subscription get 403 from the alarms API.
-    let alarms = api.get(&format!("{APP_API_V2}/users/{user}/alarms")).ok();
+    let alarms = alarms.ok();
     let state = state_type(&t).to_owned();
     let level = t["currentDeviceLevel"].as_i64().map(|v| v as i32);
     let target = t["currentLevel"].as_i64().map(|v| v as i32);
@@ -325,13 +336,22 @@ fn phases(t: &Value, state: &str) -> Value {
 }
 
 /// Confirm a change, then show the side as it is now.
-fn print_side(api: &mut Api, user: &str, as_json: bool, done: &str) -> Result<()> {
-    let s = side_info(api, user)?;
+fn print_side(api: &Api, user: &str, as_json: bool, done: &str) -> Result<()> {
+    let (s, me) = std::thread::scope(|sc| {
+        let me = sc.spawn(|| me(api));
+        let s = side_info(api, user);
+        (
+            s,
+            me.join()
+                .unwrap_or_else(|_| bail!("request thread panicked")),
+        )
+    });
+    let s = s?;
     if as_json {
         println!("{}", serde_json::to_string_pretty(&s)?);
         return Ok(());
     }
-    let me = me(api)?;
+    let me = me?;
     println!("{}\n", ui::ok(done));
     for line in ui::side_block(ui::side_title(&me.side), false, &s) {
         println!("{line}");
@@ -339,7 +359,7 @@ fn print_side(api: &mut Api, user: &str, as_json: bool, done: &str) -> Result<()
     Ok(())
 }
 
-fn status(api: &mut Api, as_json: bool) -> Result<()> {
+fn status(api: &Api, as_json: bool) -> Result<()> {
     let me = me(api)?;
     let dev = device(api, &me.device_id)?;
     let left = dev["leftUserId"].as_str().map(str::to_owned);
