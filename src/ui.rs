@@ -20,13 +20,12 @@ pub const HELP_STYLES: Styles = Styles::styled()
 
 const GAUGE_CELLS: i32 = 41; // one cell per half step of the app's -10..=+10 scale
 const TARGET_MARK: &str = "◆";
-/// Nerd Font `cod-circle_filled`: the same size as `TARGET_MARK` on the bar,
-/// where `●` draws noticeably bigger than `◆`.
-const NOW_MARK: &str = "\u{ea71}";
-/// Chevrons pointing from a label to its marker: Nerd Font `md-chevron_down`
-/// from a label above the bar, `md-chevron_up` from one below it. They need
-/// a Nerd Font; Ghostty on both of the user's machines uses JetBrainsMono NF.
-const CARET_ABOVE: &str = "\u{f0140}";
+/// Nerd Font `md-circle_medium`, a step smaller than `◆` on the bar so the
+/// target stands out (`●` draws bigger than `◆`).
+const NOW_MARK: &str = "\u{f09de}";
+/// Nerd Font `md-chevron_up`, pointing from the current label up to its
+/// marker. Nerd Font glyphs need one installed; Ghostty on both of the user's
+/// machines uses JetBrainsMono NF.
 const CARET_BELOW: &str = "\u{f0143}";
 
 const COOL: (f64, f64, f64) = (80.0, 150.0, 255.0);
@@ -87,8 +86,8 @@ const ROW_INDENT: usize = 4 + LABEL_WIDTH;
 /// `cool ` before the first gauge cell.
 const GAUGE_LEAD: usize = 5;
 
-/// `<chevron> target 81°F 0` with the chevron at `col`, directly over (or under) its
-/// marker on the bar. Near the warm end it flips to `target 81°F 0 <chevron>` so it
+/// `<chevron> current 74°F -3.1` with the chevron at `col`, directly over (or under) its
+/// marker on the bar. Near the warm end it flips to `current 74°F -3.1 <chevron>` so it
 /// doesn't run past `end`.
 fn bar_label(
     name: &str,
@@ -125,6 +124,23 @@ fn bar_label(
             " ".repeat((col + 1).saturating_sub(width))
         )
     }
+}
+
+/// The target's `81°F 0` centered over its marker at `col`, kept between
+/// `start` and `end`.
+fn value_over(raw: i32, col: usize, start: usize, end: usize) -> String {
+    let f = format!("{}°F", temp::raw_to_f(raw));
+    let app = temp::raw_to_app(raw);
+    let width = f.chars().count() + 1 + app.chars().count();
+    let left = (col + 1)
+        .saturating_sub(width.div_ceil(2))
+        .clamp(start, end.saturating_sub(width).max(start));
+    format!(
+        "{}{} {}",
+        " ".repeat(left),
+        colored_level(&f, raw).bold(),
+        app.dimmed()
+    )
 }
 
 /// `  ◆ target   81°F`: an optional bar marker, a dimmed label, the value.
@@ -218,20 +234,12 @@ pub fn side_block(title: Option<&str>, you: bool, s: &Value) -> Vec<String> {
     // The API keeps reporting the current level while the bed is off.
     let now = s["level"].as_i64().map(|v| v as i32);
     if let Some(t) = target {
-        // Target labelled above the bar, current below, each starting at
-        // (or ending on) its marker's column.
+        // The target's value sits centered over the diamond; the current
+        // level is labelled below, starting at (or ending on) its marker.
         let cell0 = ROW_INDENT + GAUGE_LEAD;
         let end = cell0 + GAUGE_CELLS as usize + GAUGE_LEAD;
         let col = |raw| cell0 + gauge_cell(raw) as usize;
-        lines.push(bar_label(
-            "target",
-            t,
-            true,
-            false,
-            CARET_ABOVE,
-            col(t),
-            end,
-        ));
+        lines.push(value_over(t, col(t), ROW_INDENT, end));
         lines.push(row("", "", gauge(t, now, on)));
         if let Some(n) = now {
             lines.push(bar_label(
@@ -531,7 +539,7 @@ pub fn error(msg: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{CARET_ABOVE, CARET_BELOW, bar_label, eta};
+    use super::{CARET_BELOW, bar_label, eta, value_over};
 
     #[test]
     fn formats_eta() {
@@ -547,7 +555,7 @@ mod tests {
         let plain = String::from_utf8(strip_ansi(line.as_bytes())).unwrap();
         plain
             .chars()
-            .position(|c| [CARET_ABOVE, CARET_BELOW].contains(&c.to_string().as_str()))
+            .position(|c| c.to_string() == CARET_BELOW)
             .unwrap()
     }
 
@@ -568,10 +576,20 @@ mod tests {
     }
 
     #[test]
+    fn target_value_centers_on_its_marker() {
+        // `81°F 0` is 6 wide: its middle (column 2 or 3) sits on the marker.
+        let line = String::from_utf8(strip_ansi(value_over(0, 30, 13, 70).as_bytes())).unwrap();
+        assert_eq!(line.trim_end(), format!("{}81°F 0", " ".repeat(28)));
+        // Clamped at the edges.
+        let line = String::from_utf8(strip_ansi(value_over(100, 69, 13, 70).as_bytes())).unwrap();
+        assert!(line.chars().count() <= 70);
+    }
+
+    #[test]
     fn label_caret_points_at_its_marker() {
         // Room to the right: caret first, at the marker's column.
         assert_eq!(
-            caret_col(&bar_label("target", 0, true, false, CARET_ABOVE, 30, 70)),
+            caret_col(&bar_label("current", 0, false, true, CARET_BELOW, 30, 70)),
             30
         );
         // Near the warm end the label flips left; the caret stays on the marker.
