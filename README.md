@@ -36,30 +36,47 @@ output is piped or `NO_COLOR` is set.
 ## Install
 
 ```
-cargo install --path . --force
+cargo install --git https://github.com/ksc98/8sleep-cli
 ```
 
-## Credentials
+or, from a checkout, `cargo install --path .`.
 
-The first run reads your email and password from 1Password with
-`op read op://Personal/EightSleep/{username,password}`. Point it at another
-item with `EIGHTSLEEP_OP_ITEM=op://Vault/Item`, or skip 1Password by setting
-`EIGHTSLEEP_EMAIL` and `EIGHTSLEEP_PASSWORD`. Accounts that sign in with
-Google or Apple need a password set in the app first.
+## Setup
 
-Tokens are cached in `~/.cache/8sleep/token.json` (mode 0600) and refreshed
-with the refresh token, so 1Password is only asked again if a refresh fails.
+Sign in with your Eight Sleep email and password. Accounts that sign in with
+Google or Apple need to set a password in the app first.
 
-## Config
-
-`~/.config/8sleep/config.toml` holds your Pod's device id:
+Put them in `~/.config/8sleep/config.toml` (or `$XDG_CONFIG_HOME/8sleep/config.toml`):
 
 ```toml
-device_id = "793e54a45af630d3b52cb74198022129f2ba4fea"
+email = "you@example.com"
+password = "your-password"
 ```
 
-The first run looks it up and writes it, so later commands skip that request.
-If the pod is ever replaced, delete the line and it's looked up again.
+and make the file readable only by you:
+
+```
+chmod 600 ~/.config/8sleep/config.toml
+```
+
+To keep the password out of the file, set `password_command` instead. Its
+output is the password, so it works with any password manager:
+
+```toml
+email = "you@example.com"
+password_command = "pass show eightsleep"
+# macOS Keychain: password_command = "security find-generic-password -s eightsleep -w"
+```
+
+`EIGHTSLEEP_EMAIL` and `EIGHTSLEEP_PASSWORD` override the file.
+
+The password is only used to sign in. The CLI then keeps a token in
+`~/.cache/8sleep/token.json` (mode 0600) and refreshes it, so it asks for the
+password again only if the refresh fails.
+
+The first run also looks up your Pod and saves its id in the same file
+(`device_id = "..."`). If the Pod is ever replaced, delete that line and it's
+looked up again.
 
 ## Temperature
 
@@ -67,3 +84,7 @@ The API stores a raw level from -100 to 100. The CLI shows it as -10..+10
 (raw ÷ 10) and as °F through a lookup table. The table comes
 from [lukas-clarke/eight_sleep](https://github.com/lukas-clarke/eight_sleep),
 the Home Assistant integration this CLI's API calls are based on.
+
+## License
+
+MIT

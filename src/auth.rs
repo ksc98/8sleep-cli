@@ -1,8 +1,9 @@
 //! Login, token refresh and the on-disk token cache.
 //!
-//! Credentials come from 1Password (`op`) by default, or from
-//! `EIGHTSLEEP_EMAIL` / `EIGHTSLEEP_PASSWORD`. A password login happens only
-//! when there is no cached refresh token or the refresh grant fails.
+//! Credentials come from `EIGHTSLEEP_EMAIL` / `EIGHTSLEEP_PASSWORD` or the
+//! config file (`email`, and `password` or `password_command`). A password
+//! login happens only when there is no cached refresh token or the refresh
+//! grant fails.
 
 use std::fs;
 use std::io::Write;
@@ -20,7 +21,6 @@ const AUTH_URL: &str = "https://auth-api.8slp.net/v1/tokens";
 const CLIENT_ID: &str = "0894c7f33bb94800a03f1f4df13a4f38";
 const CLIENT_SECRET: &str = "f0954a3ed5763ba3d06834c73731a32f15f168f47d4f164751275def86db0c76";
 const EXPIRY_BUFFER_SECS: u64 = 120;
-const DEFAULT_OP_ITEM: &str = "op://Personal/EightSleep";
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Token {
@@ -160,29 +160,75 @@ fn token_request(
 }
 
 fn credentials() -> Result<(String, String)> {
-    if let (Ok(e), Ok(p)) = (
-        std::env::var("EIGHTSLEEP_EMAIL"),
-        std::env::var("EIGHTSLEEP_PASSWORD"),
-    ) {
-        return Ok((e, p));
+    let path = crate::config::path()?;
+    let missing = || {
+        anyhow!(
+            "no Eight Sleep credentials: set EIGHTSLEEP_EMAIL and EIGHTSLEEP_PASSWORD, \
+             or `email` and `password` (or `password_command`) in {}",
+            path.display()
+        )
+    };
+    let email = match std::env::var("EIGHTSLEEP_EMAIL") {
+        Ok(e) => e,
+        Err(_) => crate::config::get("email")?.ok_or_else(missing)?,
+    };
+    if let Ok(p) = std::env::var("EIGHTSLEEP_PASSWORD") {
+        return Ok((email, p));
     }
-    let item = std::env::var("EIGHTSLEEP_OP_ITEM").unwrap_or_else(|_| DEFAULT_OP_ITEM.into());
-    Ok((
-        op_read(&format!("{item}/username"))?,
-        op_read(&format!("{item}/password"))?,
-    ))
+    if let Some(p) = crate::config::get("password")? {
+        warn_if_readable(&path);
+        return Ok((email, p));
+    }
+    let cmd = crate::config::get("password_command")?.ok_or_else(missing)?;
+    Ok((email, password_from(&cmd)?))
 }
 
-fn op_read(reference: &str) -> Result<String> {
-    let out = Command::new("op")
-        .args(["read", "--no-newline", reference])
+/// Run `password_command` through the shell; its output, minus the trailing
+/// newline, is the password.
+fn password_from(cmd: &str) -> Result<String> {
+    #[cfg(unix)]
+    let mut c = Command::new("sh");
+    #[cfg(unix)]
+    c.args(["-c", cmd]);
+    #[cfg(windows)]
+    let mut c = Command::new("cmd");
+    #[cfg(windows)]
+    c.args(["/C", cmd]);
+    let out = c
         .output()
-        .context("running `op` (1Password CLI); set EIGHTSLEEP_EMAIL/EIGHTSLEEP_PASSWORD instead if it isn't installed")?;
+        .with_context(|| format!("running password_command `{cmd}`"))?;
     if !out.status.success() {
-        return Err(anyhow!(
-            "`op read {reference}` failed: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        ));
+        let err = String::from_utf8_lossy(&out.stderr);
+        let err = err.trim();
+        if err.is_empty() {
+            bail!("password_command `{cmd}` failed ({})", out.status);
+        }
+        bail!("password_command `{cmd}` failed: {err}");
     }
-    Ok(String::from_utf8(out.stdout)?)
+    let pw = String::from_utf8(out.stdout).context("password_command printed non-UTF-8")?;
+    let pw = pw.strip_suffix('\n').unwrap_or(&pw);
+    let pw = pw.strip_suffix('\r').unwrap_or(pw);
+    if pw.is_empty() {
+        bail!("password_command `{cmd}` printed nothing");
+    }
+    Ok(pw.to_owned())
+}
+
+/// A plaintext password belongs in a file only you can read.
+fn warn_if_readable(path: &std::path::Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(m) = fs::metadata(path)
+            && m.permissions().mode() & 0o077 != 0
+        {
+            eprintln!(
+                "warning: {} holds a password but other users can read it; run `chmod 600 {}`",
+                path.display(),
+                path.display()
+            );
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = path;
 }

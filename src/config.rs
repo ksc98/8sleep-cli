@@ -1,7 +1,9 @@
 //! `~/.config/8sleep/config.toml` (or `$XDG_CONFIG_HOME/8sleep/config.toml`).
 //!
 //! ```toml
-//! device_id = "793e54a4..."   # the Pod; filled in on first run
+//! email = "you@example.com"
+//! password = "..."                 # or password_command = "pass show eightsleep"
+//! device_id = "..."                # the Pod; filled in on first run
 //! ```
 //!
 //! Edits keep the file's comments and other keys (`toml_edit`).

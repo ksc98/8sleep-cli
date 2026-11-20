@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 description = "CLI for the Eight Sleep Pod"
 license = "MIT"
+repository = "https://github.com/ksc98/8sleep-cli"
 
 [[bin]]
 name = "8sleep"
