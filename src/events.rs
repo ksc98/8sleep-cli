@@ -85,8 +85,10 @@ fn parse(t: &str) -> Option<jiff::Timestamp> {
     t.parse().ok()
 }
 
+/// A level on the app's scale with one decimal when it isn't a whole step:
+/// Autopilot moves in fractions (-1.4 → -1.9) that whole steps would hide.
 fn app(v: &Value) -> Option<String> {
-    v.as_i64().map(|l| temp::raw_to_app(l as i32))
+    v.as_i64().map(|l| temp::raw_to_app_precise(l as i32))
 }
 
 /// `smart:initial` -> `night`.
@@ -235,7 +237,7 @@ mod tests {
         let dial = json!({"actionType": "dial-update", "previousPhase": "smart:bedtime", "currentPhase": "smart:bedtime", "previousLevel": 0, "currentLevel": -100});
         assert_eq!(describe(&dial).unwrap(), "dial 0 → -10");
         let auto = json!({"actionType": "autopilot-update", "previousPhase": "smart:initial", "currentPhase": "smart:initial", "previousLevel": -14, "currentLevel": -20});
-        assert_eq!(describe(&auto).unwrap(), "Autopilot night -1 → -2");
+        assert_eq!(describe(&auto).unwrap(), "Autopilot night -1.4 → -2");
         let moved = json!({
             "actionType": "settings-update", "previousPhase": "smart:bedtime", "currentPhase": "smart:bedtime",
             "previousBedTime": 0, "currentBedTime": 0, "previousInitialSleep": -14, "currentInitialSleep": -20,
@@ -244,7 +246,7 @@ mod tests {
         });
         assert_eq!(
             describe(&moved).unwrap(),
-            "night -1 → -2, bedtime 1:40 AM → 2:30 AM (first night recommendation)"
+            "night -1.4 → -2, bedtime 1:40 AM → 2:30 AM (first night recommendation)"
         );
         let same = json!({"actionType": "settings-update", "previousSchedules": sched("01:40:00"), "currentSchedules": sched("01:40:00")});
         assert!(describe(&same).is_none());
