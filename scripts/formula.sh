@@ -6,7 +6,7 @@ set -euo pipefail
 v=${1:?usage: scripts/formula.sh VERSION (e.g. 0.1.3)}
 tap=${TAP:-$HOME/dev/homebrew-tap}
 base="https://github.com/ksc98/8sleep-cli/releases/download/v$v"
-targets=(aarch64-apple-darwin x86_64-apple-darwin x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu)
+targets=(aarch64-apple-darwin x86_64-apple-darwin x86_64-unknown-linux-musl aarch64-unknown-linux-musl)
 
 declare -A sha
 assets=$(gh release view "v$v" -R ksc98/8sleep-cli --json assets --jq '.assets[] | "\(.name) \(.digest)"')
@@ -20,7 +20,6 @@ cat >"$tap/Formula/eightsleep.rb" <<EOF
 class Eightsleep < Formula
   desc "Command-line control for the Eight Sleep Pod"
   homepage "https://github.com/ksc98/8sleep-cli"
-  version "$v"
   license "MIT"
 
   on_macos do
@@ -36,12 +35,12 @@ class Eightsleep < Formula
 
   on_linux do
     on_arm do
-      url "$base/8sleep-aarch64-unknown-linux-gnu.tar.gz"
-      sha256 "${sha[aarch64-unknown-linux-gnu]}"
+      url "$base/8sleep-aarch64-unknown-linux-musl.tar.gz"
+      sha256 "${sha[aarch64-unknown-linux-musl]}"
     end
     on_intel do
-      url "$base/8sleep-x86_64-unknown-linux-gnu.tar.gz"
-      sha256 "${sha[x86_64-unknown-linux-gnu]}"
+      url "$base/8sleep-x86_64-unknown-linux-musl.tar.gz"
+      sha256 "${sha[x86_64-unknown-linux-musl]}"
     end
   end
 
