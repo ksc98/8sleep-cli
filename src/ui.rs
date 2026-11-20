@@ -76,7 +76,12 @@ fn gauge(target: i32, now: Option<i32>, on: bool) -> String {
             }
         })
         .collect();
-    format!("{} {bar} {}", "cool".dimmed(), "warm".dimmed())
+    // The end labels take the colors of the bar ends they name.
+    format!(
+        "{} {bar} {}",
+        colored_level("cool", -100),
+        colored_level("warm", 100)
+    )
 }
 
 /// Columns before a `row` value: two spaces, the marker, a space, the label.
