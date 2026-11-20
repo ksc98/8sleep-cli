@@ -3,6 +3,11 @@
 Rust CLI for the Eight Sleep Pod. Package `eightsleep`, binary `8sleep`
 (Cargo rejects package names that start with a digit).
 
+## Workflow
+
+- After every change: `cargo test`, `cargo install --path . --force`, test the installed `~/.cargo/bin/8sleep`, then commit and push to `main` on `ksc98/8sleep-cli`.
+- No CI yet. Don't add GitHub Actions or other CI until asked.
+
 ## Code map
 
 - `src/main.rs`: clap commands, side → user resolution, status rendering.
