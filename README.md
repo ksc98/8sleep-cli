@@ -36,6 +36,12 @@ output is piped or `NO_COLOR` is set.
 ## Install
 
 ```
+brew install ksc98/tap/eightsleep
+```
+
+or with Cargo:
+
+```
 cargo install --git https://github.com/ksc98/8sleep-cli
 ```
 
