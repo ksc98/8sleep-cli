@@ -260,7 +260,7 @@ pub fn side_block(title: Option<&str>, you: bool, s: &Value) -> Vec<String> {
     lines
 }
 
-/// The latest changes, oldest first, one per row: `events   1:25 AM
+/// The latest changes, newest first, one per row: `events   1:25 AM
 /// bedtime 1:40 AM → 2:30 AM`, the times dimmed and right-aligned.
 fn event_rows(events: &Value) -> Vec<String> {
     let Some(list) = events.as_array() else {

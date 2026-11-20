@@ -25,7 +25,7 @@ pub fn url(user: &str) -> String {
     )
 }
 
-/// The latest changes, oldest first, as `{time, type, text}`. `side` supplies
+/// The latest changes, newest first, as `{time, type, text}`. `side` supplies
 /// `phase_since` and the running phase.
 pub fn list(log: &Value, side: &Value) -> Vec<Value> {
     let mut events: Vec<&Value> = log["events"]
@@ -49,8 +49,7 @@ pub fn list(log: &Value, side: &Value) -> Vec<Value> {
         let i = out.partition_point(|(t, _)| Some(*t) <= at);
         out.insert(i, (at.unwrap_or_default(), phase));
     }
-    let skip = out.len().saturating_sub(SHOWN);
-    out.into_iter().skip(skip).map(|(_, v)| v).collect()
+    out.into_iter().rev().take(SHOWN).map(|(_, v)| v).collect()
 }
 
 fn parse(t: &str) -> Option<jiff::Timestamp> {
@@ -234,9 +233,9 @@ mod tests {
         assert_eq!(
             texts,
             [
-                "on at 0 · by schedule",
+                "now phase started",
                 "bedtime 1:40 AM → 2:30 AM",
-                "now phase started"
+                "on at 0 · by schedule",
             ]
         );
         // The scheduled start four minutes before the phase start covers it.
