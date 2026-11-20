@@ -6,8 +6,10 @@ Command-line control for an Eight Sleep Pod.
 8sleep status                  # power, target and current level, schedule, alarm
 8sleep status --live [10s]     # refresh in place every 5s (or the interval) until Ctrl-C
 8sleep on | off
-8sleep temp 68                 # °F (55-111)
+8sleep temp 68                 # °F (55-111); live while on, saved to the schedule while off
 8sleep temp -3                 # app scale (-10..+10)
+8sleep temp -1 --phase night   # save a phase's level in the schedule (now / night / dawn)
+8sleep temp 0 --apply          # save it and run at it now, turning the bed on if needed
 8sleep away on | off
 8sleep prime
 8sleep schedule                # bedtimes and the now / night / dawn levels (`bedtime` works too)

@@ -14,7 +14,7 @@ use api::{APP_API, APP_API_V2, Api, CLIENT_API};
 const EXAMPLES: &str = "\
 \x1b[1;92mExamples:\x1b[0m
   8sleep status           show the bed
-  8sleep temp 68          set the target to 68°F
+  8sleep temp 68          set the target to 68°F (saved to the schedule while off)
   8sleep temp -3          set the target on the app's -10..+10 scale
   8sleep off
   8sleep away on
@@ -54,9 +54,19 @@ enum Cmd {
     /// Turn off.
     Off,
     /// Set temperature: °F (55-111, e.g. 68) or the app's -10..+10 scale (e.g. -3).
+    ///
+    /// While the bed is on, this changes the live target. While it's off, it
+    /// saves the level in the schedule's `now` phase and leaves the bed off,
+    /// unless --apply is given.
     Temp {
         #[arg(allow_negative_numbers = true, value_parser = temp::parse)]
         value: i32,
+        /// Save the level for this phase of the schedule instead.
+        #[arg(long, value_enum)]
+        phase: Option<Phase>,
+        /// Also turn the bed on (if it's off) and run at this level now.
+        #[arg(long)]
+        apply: bool,
     },
     /// Turn away mode on or off.
     Away {
@@ -136,6 +146,32 @@ enum AlarmCmd {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum Phase {
+    Now,
+    Night,
+    Dawn,
+}
+
+impl Phase {
+    /// The phase's key in the API's `smart` levels.
+    fn smart_key(self) -> &'static str {
+        match self {
+            Phase::Now => "bedTimeLevel",
+            Phase::Night => "initialSleepLevel",
+            Phase::Dawn => "finalSleepLevel",
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Phase::Now => "now",
+            Phase::Night => "night",
+            Phase::Dawn => "dawn",
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
 enum Side {
     Left,
     Right,
@@ -170,21 +206,48 @@ fn run(cli: Cli) -> Result<()> {
             set_state(&api, &user, "off")?;
             print_side(&api, &user, cli.json, "turned off")
         }
-        Cmd::Temp { value } => {
+        Cmd::Temp {
+            value,
+            phase,
+            apply,
+        } => {
             let user = target_user(&api, cli.side)?;
             let url = format!("{APP_API}/users/{user}/temperature");
             let cur = api.get(&url)?;
-            if state_type(&cur) == "off" {
-                set_state(&api, &user, "smart")?;
-            }
-            // In smart mode this overrides the current phase's level
-            // (overrideLevels.<phase>); `on` after `off` drops the override.
-            api.put(&url, json!({ "currentLevel": value }))?;
-            let msg = format!(
-                "target set to {}°F ({})",
+            let off = state_type(&cur) == "off";
+            let level = format!(
+                "{}°F ({})",
                 temp::raw_to_f(value),
                 temp::raw_to_app_precise(value)
             );
+            // Live change: the bed is on and no phase was named.
+            if !off && phase.is_none() {
+                // In smart mode this overrides the running phase for tonight
+                // (overrideLevels.<phase>); the schedule itself is unchanged.
+                api.put(&url, json!({ "currentLevel": value }))?;
+                return print_side(&api, &user, cli.json, &format!("target set to {level}"));
+            }
+            let phase = phase.unwrap_or(Phase::Now);
+            let mut smart = cur["smart"].clone();
+            if !smart.is_object() {
+                bail!("no smart schedule levels to change");
+            }
+            smart[phase.smart_key()] = json!(value);
+            api.put(&url, json!({ "smart": smart }))?;
+            let mut msg = format!("schedule {} set to {level}", phase.name());
+            if apply {
+                if off {
+                    set_state(&api, &user, "smart")?;
+                }
+                api.put(&url, json!({ "currentLevel": value }))?;
+                msg.push_str(if off {
+                    ", turned on at it"
+                } else {
+                    ", running at it now"
+                });
+            } else if off {
+                msg.push_str("; the bed stays off");
+            }
             print_side(&api, &user, cli.json, &msg)
         }
         Cmd::Away { state } => {

@@ -34,6 +34,7 @@ Rust CLI for the Eight Sleep Pod. Package `eightsleep`, binary `8sleep`
 - The refresh-grant response has no `userId`. Keep the one from the password login.
 - Away mode backdates the `awayPeriod` timestamp a day, as upstream does. Upstream says the change applies immediately only with a past timestamp (not tested here).
 - Pod 6 returns no measured bed or room temperature on the device endpoint. Upstream reads those from `/users/{id}/trends`, which is empty until the pod has recorded a sleep session.
+- `temp`: bed on and no `--phase` → `PUT /temperature {currentLevel}` (tonight's override). Otherwise → `PUT /temperature {smart: {...}}` with the phase's level changed (persistent; verified for dawn 2026-11-19), and `--apply` then turns the bed on if off and sets `currentLevel`.
 - Smart schedule phases: `smart.{bedTimeLevel,initialSleepLevel,finalSleepLevel}`, active one in `currentState.type` (`smart:bedtime`). `temp` in smart mode writes `overrideLevels.<phase>` for the current phase; only the `bedtime` key has been seen, `initial`/`final` are assumed to follow the state names. `off` then `on` resumes the schedule's own level and drops that override.
 - Timed holds don't work on Pod 6: a `timeBased` PUT is stored but ignored while the state is `smart:*`, and a PUT of `{timeBased: {level, durationSeconds}, currentState: {type: timeBased}}` returns 500.
 - Test mutations against the real bed by snapshotting `GET /users/{id}/temperature` first and restoring it after.
