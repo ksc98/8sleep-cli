@@ -294,7 +294,7 @@ pub fn alarm_line(n: usize, a: &Value) -> String {
     line
 }
 
-fn days_summary(days: &Value) -> String {
+pub fn days_summary(days: &Value) -> String {
     const DAYS: [(&str, &str); 7] = [
         ("monday", "Mon"),
         ("tuesday", "Tue"),
@@ -320,6 +320,23 @@ fn days_summary(days: &Value) -> String {
             .collect::<Vec<_>>()
             .join(" "),
     }
+}
+
+/// `8sleep bedtime` row: `● on   2:15 AM   daily`.
+pub fn bedtime_line(b: &Value) -> String {
+    let on = b["enabled"].as_bool() == Some(true);
+    let power = if on {
+        format!("{} {}", "●".green(), "on ".green().bold())
+    } else {
+        format!("{} {}", "○".dimmed(), "off".dimmed())
+    };
+    let time = format!("{:>8}", alarm::clock(b["time"].as_str().unwrap_or("?")));
+    let time = if on {
+        time.bold().to_string()
+    } else {
+        time.dimmed().to_string()
+    };
+    format!("  {power}  {time}   {}", days_summary(&b["days"]))
 }
 
 pub fn side_title(side: &str) -> &'static str {

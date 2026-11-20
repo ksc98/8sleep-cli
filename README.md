@@ -9,6 +9,9 @@ Command-line control for an Eight Sleep Pod.
 8sleep temp -3                 # app scale (-10..+10)
 8sleep away on | off
 8sleep prime
+8sleep bedtime                 # when the schedule turns the bed on
+8sleep bedtime 11pm [--days weekdays|weekends|daily|mon,wed]
+8sleep bedtime on | off
 8sleep alarm                   # list alarms
 8sleep alarm 8:30pm            # set the alarm time (also 7am, 20:30)
 8sleep alarm on | off

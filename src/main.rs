@@ -73,6 +73,16 @@ enum Cmd {
         #[arg(short, long)]
         number: Option<usize>,
     },
+    /// Show the bedtime the schedule turns the bed on at, change its time
+    /// (11pm, 23:00) or days, or turn it on/off.
+    Bedtime {
+        /// A new time (11pm, 10:30pm, 23:00), or on / off.
+        #[arg(value_parser = alarm::parse_action)]
+        action: Option<alarm::Action>,
+        /// Run on these days: weekdays, weekends, daily, or a list like mon,wed,fri.
+        #[arg(long, value_parser = alarm::parse_days)]
+        days: Option<Value>,
+    },
     /// Show your side assignment, or change it (solo = whole bed).
     Side {
         #[arg(value_enum)]
@@ -212,6 +222,10 @@ fn run(cli: Cli) -> Result<()> {
                 Some(AlarmCmd::Test { duration }) => alarm_test(&api, &user, duration, cli.json),
             }
         }
+        Cmd::Bedtime { action, days } => {
+            let user = target_user(&api, cli.side)?;
+            bedtime_cmd(&api, &user, action, days, cli.json)
+        }
         Cmd::Side { side } => {
             let me = me(&api)?;
             let side = match side {
@@ -272,6 +286,80 @@ fn alarm_cmd(
     }
     api.put(&format!("{APP_API}/users/{user}/alarms/{id}"), body)?;
     print_alarms(&list_alarms(api, user)?, as_json, Some(&done))
+}
+
+/// The schedule lives in `GET /temperature/pod` as `schedules` and is
+/// written back whole with `PUT /bedtime {"schedules": [...]}`.
+fn bedtime_cmd(
+    api: &Api,
+    user: &str,
+    action: Option<alarm::Action>,
+    days: Option<Value>,
+    as_json: bool,
+) -> Result<()> {
+    let read = || -> Result<Vec<Value>> {
+        let v = api.get(&format!("{APP_API}/users/{user}/temperature/pod"))?;
+        Ok(v["schedules"].as_array().cloned().unwrap_or_default())
+    };
+    let mut schedules = read()?;
+    let mut done = None;
+    if action.is_some() || days.is_some() {
+        let [s] = schedules.as_mut_slice() else {
+            bail!(
+                "expected one bedtime schedule, found {}; change it in the Eight Sleep app",
+                schedules.len()
+            );
+        };
+        let mut what = Vec::new();
+        match &action {
+            Some(alarm::Action::Set(t)) => {
+                s["time"] = json!(t);
+                what.push(format!("set to {}", alarm::clock(t)));
+            }
+            Some(alarm::Action::Enable(on)) => {
+                s["enabled"] = json!(on);
+                what.push((if *on { "on" } else { "off" }).to_string());
+            }
+            None => {}
+        }
+        if let Some(d) = &days {
+            let names: Vec<&str> = alarm::WEEKDAYS
+                .iter()
+                .copied()
+                .filter(|w| d[*w].as_bool() == Some(true))
+                .collect();
+            s["days"] = json!(names);
+            what.push(format!("days: {}", ui::days_summary(d)));
+        }
+        api.put(
+            &format!("{APP_API}/users/{user}/bedtime"),
+            json!({ "schedules": schedules }),
+        )?;
+        done = Some(format!("bedtime {}", what.join(", ")));
+        schedules = read()?;
+    }
+    let shown: Vec<Value> = schedules
+        .iter()
+        .map(|s| {
+            let mut b = bedtime_days(s);
+            b["enabled"] = json!(s["enabled"].as_bool() == Some(true));
+            b
+        })
+        .collect();
+    if as_json {
+        println!("{}", serde_json::to_string_pretty(&shown)?);
+        return Ok(());
+    }
+    if let Some(d) = done {
+        println!("{}\n", ui::ok(&d));
+    }
+    if shown.is_empty() {
+        println!("  no bedtime schedule");
+    }
+    for b in &shown {
+        println!("{}", ui::bedtime_line(b));
+    }
+    Ok(())
 }
 
 /// The user's alarms sorted by time of day, without vibration-test
@@ -498,6 +586,10 @@ fn bedtime(sched: &Value) -> Value {
     if sched["enabled"].as_bool() != Some(true) {
         return Value::Null;
     }
+    bedtime_days(sched)
+}
+
+fn bedtime_days(sched: &Value) -> Value {
     let days: serde_json::Map<String, Value> = alarm::WEEKDAYS
         .iter()
         .map(|d| {
