@@ -171,8 +171,8 @@ pub fn power(s: &Value) -> String {
     out
 }
 
-/// Header line: model, connectivity, water and, for a solo bed, `power`.
-pub fn device_line(dev: &Value, water: &str, power: Option<&str>) -> String {
+/// Header line: model, connectivity, water.
+pub fn device_line(dev: &Value, water: &str) -> String {
     let model = dev["modelString"].as_str().unwrap_or("Pod");
     let online = if dev["online"].as_bool() == Some(true) {
         format!("{} online", "●".green())
@@ -185,16 +185,18 @@ pub fn device_line(dev: &Value, water: &str, power: Option<&str>) -> String {
         _ => water.yellow().bold().to_string(),
     };
     let sep = " · ".dimmed().to_string();
-    let mut line = format!("{}{sep}{online}{sep}{water}", model.bold());
-    if let Some(p) = power {
-        line.push_str(&format!("{sep}{p}"));
-    }
-    line
+    format!("{}{sep}{online}{sep}{water}", model.bold())
+}
+
+/// A solo bed's `power` on its own row, its left edge lined up with the
+/// row labels (`schedule`, `bedtime`) below.
+pub fn power_row(s: &Value) -> String {
+    format!("    {}", power(s))
 }
 
 /// The block for one side of the bed. `title` heads it (`left side (you)
 /// ● active`) on a split bed; a solo bed passes `None` and shows its power
-/// elsewhere.
+/// in a `power_row`.
 pub fn side_block(title: Option<&str>, you: bool, s: &Value) -> Vec<String> {
     let mut lines = Vec::new();
     if let Some(title) = title {

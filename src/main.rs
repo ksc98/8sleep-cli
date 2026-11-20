@@ -801,7 +801,7 @@ fn print_side(api: &Api, user: &str, as_json: bool, done: &str) -> Result<()> {
     println!("{}\n", ui::ok(done));
     let title = (me.side != "solo").then(|| ui::side_title(&me.side));
     if title.is_none() {
-        println!("  {}", ui::power(&s));
+        println!("{}", ui::power_row(&s));
     }
     for line in ui::side_block(title, false, &s) {
         println!("{line}");
@@ -841,14 +841,18 @@ fn status_snapshot(api: &Api) -> Result<(Value, Vec<String>)> {
         "water ok"
     };
 
-    // A solo bed has one block, so its power goes on the header line.
+    // A solo bed has one block, so its power gets a row of its own right
+    // under the header instead of a titled block.
     let solo = sides.len() == 1;
-    let power = solo.then(|| ui::power(&sides[0]));
-    let mut lines = vec![ui::device_line(&dev, water, power.as_deref())];
+    let mut lines = vec![ui::device_line(&dev, water)];
     for s in &sides {
         let side = s["side"].as_str().unwrap_or("?");
         let you = !solo && s["you"].as_bool() == Some(true);
-        lines.push(String::new());
+        lines.push(if solo {
+            ui::power_row(s)
+        } else {
+            String::new()
+        });
         lines.extend(ui::side_block(
             (!solo).then(|| ui::side_title(side)),
             you,
