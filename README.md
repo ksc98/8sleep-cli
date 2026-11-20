@@ -39,6 +39,15 @@ output is piped or `NO_COLOR` is set.
 brew install ksc98/tap/eightsleep
 ```
 
+or tap first, trust the tap (Homebrew refuses short names from an untrusted
+third-party tap), then install:
+
+```
+brew tap ksc98/tap
+brew trust ksc98/tap
+brew install eightsleep
+```
+
 or with Cargo:
 
 ```
@@ -52,7 +61,17 @@ or, from a checkout, `cargo install --path .`.
 Sign in with your Eight Sleep email and password. Accounts that sign in with
 Google or Apple need to set a password in the app first.
 
-Put them in `~/.config/8sleep/config.toml` (or `$XDG_CONFIG_HOME/8sleep/config.toml`):
+```
+8sleep setup
+```
+
+prompts for both, checks them with Eight Sleep, and saves them to
+`~/.config/8sleep/config.toml` (or `$XDG_CONFIG_HOME/8sleep/config.toml`), readable
+only by you. `--email` skips the email prompt, and with stdin not a terminal the
+password is read from its first line (`op read op://Personal/EightSleep/password |
+8sleep setup --email you@example.com`).
+
+Or write the file yourself:
 
 ```toml
 email = "you@example.com"

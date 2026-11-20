@@ -15,6 +15,7 @@ use api::{APP_API, APP_API_V2, Api, CLIENT_API};
 
 const EXAMPLES: &str = "\
 \x1b[1;92mExamples:\x1b[0m
+  8sleep setup            sign in and save your login
   8sleep status           show the bed
   8sleep temp 68          set the target to 68°F (saved to the schedule while off)
   8sleep temp -3          set the target on the app's -10..+10 scale
@@ -45,6 +46,19 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// Sign in and save your Eight Sleep login
+    ///
+    /// Checks the email and password with Eight Sleep, then saves them to the
+    /// config file (readable only by you). Prompts for whatever isn't given;
+    /// with stdin not a terminal, reads the password from its first line.
+    Setup {
+        /// Account email.
+        #[arg(long)]
+        email: Option<String>,
+        /// Account password. Prefer the prompt or stdin: a flag lands in your shell history.
+        #[arg(long)]
+        password: Option<String>,
+    },
     /// Show the bed
     Status {
         /// Keep refreshing in place until Ctrl-C, every 5s or the given interval (e.g. --live 10s).
@@ -210,8 +224,12 @@ fn main() {
 }
 
 fn run(cli: Cli) -> Result<()> {
+    if let Cmd::Setup { email, password } = cli.cmd {
+        return setup(email, password, cli.json);
+    }
     let api = Api::new()?;
     match cli.cmd {
+        Cmd::Setup { .. } => unreachable!("handled above"),
         Cmd::Status { live: None } => status(&api, cli.json),
         Cmd::Status { live: Some(every) } => status_live(&api, every, cli.json),
         Cmd::On => {
@@ -664,6 +682,69 @@ fn print_alarms(list: &[Value], as_json: bool, done: Option<&str>) -> Result<()>
     }
     for (i, a) in summaries.iter().enumerate() {
         println!("{}", ui::alarm_line(i + 1, a));
+    }
+    Ok(())
+}
+
+/// `8sleep setup`: sign in with the given login, and only if that works,
+/// save it with the Pod's id and cache the token.
+fn setup(email: Option<String>, password: Option<String>, as_json: bool) -> Result<()> {
+    use std::io::{BufRead, IsTerminal, Write};
+    let tty = std::io::stdin().is_terminal();
+    let email = match email {
+        Some(e) => e,
+        None if tty => {
+            eprint!("Email: ");
+            std::io::stderr().flush()?;
+            let mut line = String::new();
+            std::io::stdin().lock().read_line(&mut line)?;
+            line
+        }
+        None => bail!("stdin isn't a terminal: pass --email"),
+    };
+    let email = email.trim().to_owned();
+    let password = match password {
+        Some(p) => p,
+        None if tty => rpassword::prompt_password("Password: ")?,
+        None => {
+            let mut line = String::new();
+            std::io::stdin().lock().read_line(&mut line)?;
+            line.trim_end_matches(['\r', '\n']).to_owned()
+        }
+    };
+    if email.is_empty() || password.is_empty() {
+        bail!("an email and a password are both needed");
+    }
+
+    let http = api::http()?;
+    let token =
+        auth::login(&http, &email, &password).with_context(|| format!("signing in as {email}"))?;
+    let api = Api::with_token(http, token.clone());
+    let me = api.get(&format!("{CLIENT_API}/users/me"))?;
+    let device = me["user"]["currentDevice"]["id"].as_str();
+
+    // The login replaces a 1Password item, and a device id from another
+    // account would be wrong.
+    config::edit(&[
+        ("email", Some(&email)),
+        ("password", Some(&password)),
+        ("onepassword", None),
+        ("device_id", device),
+    ])?;
+    auth::save_cache(&token)?;
+
+    let path = config::path()?;
+    if as_json {
+        println!(
+            "{}",
+            json!({ "email": email, "user_id": token.user_id, "device_id": device, "config": path })
+        );
+    } else {
+        println!("{}", ui::ok(&format!("signed in as {email}")));
+        println!("saved to {} (only you can read it)", path.display());
+        if device.is_none() {
+            println!("no Pod on this account yet");
+        }
     }
     Ok(())
 }

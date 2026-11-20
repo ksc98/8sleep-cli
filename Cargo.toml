@@ -1,6 +1,6 @@
 [package]
 name = "eightsleep"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 description = "CLI for the Eight Sleep Pod"
 license = "MIT"
@@ -19,6 +19,7 @@ humantime = "2"
 jiff = "0.2"
 owo-colors = "4"
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "query", "gzip", "rustls", "http2"] }
+rpassword = "7"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml_edit = "0.25"

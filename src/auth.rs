@@ -54,7 +54,7 @@ fn load_cache() -> Option<Token> {
     serde_json::from_slice(&raw).ok()
 }
 
-fn save_cache(tok: &Token) -> Result<()> {
+pub fn save_cache(tok: &Token) -> Result<()> {
     write_private(&cache_path("token.json")?, &serde_json::to_vec(tok)?)
 }
 
@@ -117,6 +117,11 @@ fn refresh(http: &reqwest::blocking::Client, old: &Token) -> Result<Token> {
 
 fn password_login(http: &reqwest::blocking::Client) -> Result<Token> {
     let (email, password) = credentials()?;
+    login(http, &email, &password)
+}
+
+/// Sign in with an email and password. Nothing is cached.
+pub fn login(http: &reqwest::blocking::Client, email: &str, password: &str) -> Result<Token> {
     let body = json!({
         "client_id": CLIENT_ID,
         "client_secret": CLIENT_SECRET,
@@ -124,7 +129,13 @@ fn password_login(http: &reqwest::blocking::Client) -> Result<Token> {
         "username": email,
         "password": password,
     });
-    token_request(http, &body, None)
+    token_request(http, &body, None).map_err(|e| {
+        if e.to_string().contains("invalid_grant") {
+            anyhow!("wrong email or password")
+        } else {
+            e
+        }
+    })
 }
 
 fn token_request(
@@ -167,7 +178,7 @@ fn credentials() -> Result<(String, String)> {
     let item = crate::config::get("onepassword")?;
     let missing = || {
         anyhow!(
-            "no Eight Sleep credentials: set `email` and `password`, or `onepassword = \"op://Vault/Item\"`, in {}",
+            "no Eight Sleep credentials: run `8sleep setup`, or set `email` and `password`, or `onepassword = \"op://Vault/Item\"`, in {}",
             path.display()
         )
     };

@@ -13,6 +13,15 @@ pub const CLIENT_API: &str = "https://client-api.8slp.net/v1";
 pub const APP_API: &str = "https://app-api.8slp.net/v1";
 pub const APP_API_V2: &str = "https://app-api.8slp.net/v2";
 
+pub fn http() -> Result<Client> {
+    // No default content-type: the API edge answers 403 to bodyless GETs
+    // that carry one. `.json()` adds it to requests with a body.
+    Ok(Client::builder()
+        .user_agent(concat!("8sleep/", env!("CARGO_PKG_VERSION")))
+        .timeout(std::time::Duration::from_secs(20))
+        .build()?)
+}
+
 /// Shared across threads so independent reads can run concurrently.
 pub struct Api {
     http: Client,
@@ -22,18 +31,17 @@ pub struct Api {
 
 impl Api {
     pub fn new() -> Result<Self> {
-        // No default content-type: the API edge answers 403 to bodyless GETs
-        // that carry one. `.json()` adds it to requests with a body.
-        let http = Client::builder()
-            .user_agent(concat!("8sleep/", env!("CARGO_PKG_VERSION")))
-            .timeout(std::time::Duration::from_secs(20))
-            .build()?;
+        let http = http()?;
         let token = auth::token(&http, false)?;
-        Ok(Self {
+        Ok(Self::with_token(http, token))
+    }
+
+    pub fn with_token(http: Client, token: auth::Token) -> Self {
+        Self {
             http,
             user_id: token.user_id,
             access_token: Mutex::new(token.access_token),
-        })
+        }
     }
 
     pub fn user_id(&self) -> &str {

@@ -10,10 +10,10 @@ Rust CLI for the Eight Sleep Pod. Package `eightsleep`, binary `8sleep`
 
 ## Code map
 
-- `src/main.rs`: clap (derive) commands (no subcommand prints help), side → user resolution, status rendering.
+- `src/main.rs`: clap (derive) commands (no subcommand prints help), side → user resolution, status rendering. `setup` runs before any token is loaded: it signs in with the given login and writes the config only if that works.
 - `src/api.rs`: blocking HTTP client (shared across threads, HTTP/2, server error messages pulled out of the body) for `client-api.8slp.net` and `app-api.8slp.net`, retries once on 401 after a forced token refresh.
 - `src/auth.rs`: password and refresh grants, credentials (env, then config `email` + `password`, then the 1Password item in config `onepassword`), atomic 0600 token cache.
-- `src/config.rs`: `~/.config/8sleep/config.toml` (`email`, `password`, `onepassword`, `device_id`), edited with `toml_edit` so comments survive.
+- `src/config.rs`: `~/.config/8sleep/config.toml` (`email`, `password`, `onepassword`, `device_id`), edited with `toml_edit` so comments survive (a removed key hands its comments to the next key).
 - `src/events.rs`: `8sleep events` and `status`'s event rows, from `temp-events` (power, dial, schedule and level edits, Autopilot moves) plus the running phase's start.
 - `src/alarm.rs`: alarm time and `--days` parsing (12/24 h, bare `8:30` rejected as ambiguous), summaries, next-alarm pick, vibration-test detection, server-computed fields stripped before PUT.
 - `src/ui.rs`: colored rendering (owo-colors, printed via `anstream` so color drops when piped or under `NO_COLOR`), cool→warm gauge, clap help styles.
