@@ -20,9 +20,9 @@ pub const HELP_STYLES: Styles = Styles::styled()
 
 const GAUGE_CELLS: i32 = 41; // one cell per half step of the app's -10..=+10 scale
 const TARGET_MARK: &str = "◆";
-/// Nerd Font `md-circle_medium`, a step smaller than `◆` on the bar so the
-/// target stands out (`●` draws bigger than `◆`).
-const NOW_MARK: &str = "\u{f09de}";
+/// Nerd Font `cod-circle_filled`: the same size as `TARGET_MARK` on the bar,
+/// where `●` draws noticeably bigger than `◆`.
+const NOW_MARK: &str = "\u{ea71}";
 
 const COOL: (f64, f64, f64) = (80.0, 150.0, 255.0);
 const NEUTRAL: (f64, f64, f64) = (200.0, 200.0, 200.0);
