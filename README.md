@@ -35,7 +35,7 @@ can't coexist.
 
 `sleep` draws each night as a colored stage bar (awake, REM, light, deep) on
 an hour axis, with snoring marked above it and heart rate and HRV sparklines
-below; the time of the lowest heart rate is on the `heart` row. The bar
+below. The `heart` row says when the lowest heart rate was. The bar
 widens with the terminal up to one cell per 5 minutes (80 columns when
 piped, or `COLUMNS`). Without color it's drawn as a hypnogram (`█` awake,
 `▆` REM, `▄` light, `▂` deep, `z`/`Z` snoring and heavy snoring).
