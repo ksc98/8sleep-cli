@@ -5,6 +5,7 @@ mod config;
 mod events;
 mod sleep;
 mod temp;
+mod timeline;
 mod ui;
 
 use anstream::{eprintln, println};
@@ -994,7 +995,12 @@ fn sleep_cmd(api: &Api, user: &str, since: Option<jiff::Timestamp>, as_json: boo
         if i > 0 {
             println!();
         }
-        for line in sleep::lines(n) {
+        let style = timeline::Style {
+            width: ui::columns(),
+            color: ui::color(),
+            legend: i == 0,
+        };
+        for line in sleep::lines(n, &style) {
             println!("{line}");
         }
     }

@@ -7,6 +7,28 @@ use serde_json::Value;
 
 use crate::{alarm, temp};
 
+/// Terminal columns for drawing: the terminal's width, else `COLUMNS`,
+/// else 80 when stdout isn't a terminal.
+pub fn columns() -> usize {
+    use std::io::IsTerminal;
+    let out = std::io::stdout();
+    if out.is_terminal()
+        && let Some((terminal_size::Width(w), _)) = terminal_size::terminal_size_of(&out)
+    {
+        return w as usize;
+    }
+    std::env::var("COLUMNS")
+        .ok()
+        .and_then(|c| c.parse().ok())
+        .unwrap_or(80)
+}
+
+/// Whether stdout gets color: a terminal without `NO_COLOR`, as `anstream`
+/// decides it.
+pub fn color() -> bool {
+    anstream::AutoStream::choice(&std::io::stdout()) != anstream::ColorChoice::Never
+}
+
 const LABEL_WIDTH: usize = 9;
 /// Cargo's help colors.
 pub const HELP_STYLES: Styles = Styles::styled()

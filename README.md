@@ -12,7 +12,7 @@ Command-line control for an Eight Sleep Pod.
 8sleep temp 0 --apply          # save it and run at it now, turning the bed on if needed
 8sleep away on | off
 8sleep prime
-8sleep sleep [--since 7d]        # how you slept: stages, scores, heart rate, HRV, breathing, snoring (default: last night; --json adds every raw timeseries)
+8sleep sleep [--since 7d]        # how you slept: stages, scores, heart rate, HRV, breathing, snoring, and the night drawn as a timeline (default: last night; --json adds every raw timeseries)
 8sleep events [--since 7d]       # what changed, newest first (default: last 24h; also a date: --since 2026-11-19)
 8sleep schedule                # bedtimes and the now / night / dawn levels (`bedtime` works too)
 8sleep bedtime 8:30pm [--days weekdays|weekends|daily|mon,wed]
@@ -31,7 +31,16 @@ Command-line control for an Eight Sleep Pod.
 commands act on your own account. With several alarms or bedtimes, `-n 2`
 picks one by its number in the list (sorted by time of day). Eight Sleep
 requires bedtimes to be at least 16 hours apart, so two daily bedtimes
-can't coexist. `--json` prints JSON. Color is off when
+can't coexist.
+
+`sleep` draws each night as a colored stage bar (awake, REM, light, deep) on
+an hour axis, with snoring marked above it and heart rate and HRV sparklines
+below; the time of the lowest heart rate is on the `heart` row. The bar
+widens with the terminal up to one cell per 5 minutes (80 columns when
+piped, or `COLUMNS`). Without color it's drawn as a hypnogram (`█` awake,
+`▆` REM, `▄` light, `▂` deep, `z`/`Z` snoring and heavy snoring).
+[oura-cli](https://github.com/ksc98/oura-cli)'s `oura sleep` draws the same
+bar on the same grid, so the two trackers line up. `--json` prints JSON. Color is off when
 output is piped or `NO_COLOR` is set.
 
 ## Install
