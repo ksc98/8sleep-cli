@@ -13,6 +13,23 @@ pub const CLIENT_API: &str = "https://client-api.8slp.net/v1";
 pub const APP_API: &str = "https://app-api.8slp.net/v1";
 pub const APP_API_V2: &str = "https://app-api.8slp.net/v2";
 
+/// Resolve `8sleep api`'s path: a full `https://<host>.8slp.net/...` URL, or
+/// a path on app-api (or client-api with `client`), with `{user}` replaced.
+/// Other hosts are refused so the token never leaves Eight Sleep.
+pub fn raw_url(path: &str, client: bool, user: &str) -> Result<String> {
+    let path = path.replace("{user}", user);
+    if let Some(rest) = path.strip_prefix("https://") {
+        let host = rest.split('/').next().unwrap_or_default();
+        if !host.ends_with(".8slp.net") {
+            bail!("{host} isn't an Eight Sleep host");
+        }
+        return Ok(path);
+    }
+    let host = if client { "client-api" } else { "app-api" };
+    let sep = if path.starts_with('/') { "" } else { "/" };
+    Ok(format!("https://{host}.8slp.net{sep}{path}"))
+}
+
 pub fn http() -> Result<Client> {
     // No default content-type: the API edge answers 403 to bodyless GETs
     // that carry one. `.json()` adds it to requests with a body.
@@ -62,6 +79,11 @@ impl Api {
 
     pub fn delete(&self, url: &str) -> Result<Value> {
         self.request(Method::DELETE, url, None)
+    }
+
+    /// Any method, for `8sleep api`.
+    pub fn send(&self, method: Method, url: &str, body: Option<Value>) -> Result<Value> {
+        self.request(method, url, body)
     }
 
     fn token(&self) -> String {
@@ -147,7 +169,25 @@ fn server_message(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::server_message;
+    use super::{raw_url, server_message};
+
+    #[test]
+    fn resolves_raw_urls() {
+        assert_eq!(
+            raw_url("/v1/users/{user}/alarms", false, "u1").unwrap(),
+            "https://app-api.8slp.net/v1/users/u1/alarms"
+        );
+        assert_eq!(
+            raw_url("v1/users/{user}/trends", true, "u1").unwrap(),
+            "https://client-api.8slp.net/v1/users/u1/trends"
+        );
+        assert_eq!(
+            raw_url("https://auth-api.8slp.net/v1/x", true, "u1").unwrap(),
+            "https://auth-api.8slp.net/v1/x"
+        );
+        assert!(raw_url("https://example.com/v1", false, "u1").is_err());
+        assert!(raw_url("https://8slp.net.evil.com/v1", false, "u1").is_err());
+    }
 
     #[test]
     fn extracts_server_messages() {

@@ -127,6 +127,91 @@ pub fn summary(day: &Value) -> Value {
     })
 }
 
+/// The four times the app lets you edit on a session: got in bed, fell
+/// asleep, woke up, got out of bed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Edges {
+    pub bed: jiff::Timestamp,
+    pub asleep: jiff::Timestamp,
+    pub wake: jiff::Timestamp,
+    pub out: jiff::Timestamp,
+}
+
+/// The session to edit on a night: the main one, else the longest.
+pub fn main_session(day: &Value) -> Option<&Value> {
+    let list = day["sessions"].as_array()?;
+    let main = day["mainSessionId"].as_str();
+    list.iter()
+        .find(|s| main.is_some() && s["id"].as_str() == main)
+        .or_else(|| {
+            list.iter()
+                .max_by_key(|s| s["duration"].as_i64().unwrap_or(0))
+        })
+}
+
+pub fn edges(session: &Value) -> anyhow::Result<Edges> {
+    let at = |key: &str| -> anyhow::Result<jiff::Timestamp> {
+        let s = session[key]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("session has no {key}"))?;
+        s.parse()
+            .map_err(|e| anyhow::anyhow!("session {key} {s:?}: {e}"))
+    };
+    Ok(Edges {
+        bed: at("ts")?,
+        asleep: at("sleepStart")?,
+        wake: at("sleepEnd")?,
+        out: at("presenceEnd")?,
+    })
+}
+
+/// A clock time (`HH:MM:SS`, from `alarm::parse_time`) on whichever day in
+/// `tz` puts it closest to `near`, so `--wake 11:08am` lands on the night's
+/// own morning.
+pub fn nearest(
+    clock: &str,
+    near: jiff::Timestamp,
+    tz: &jiff::tz::TimeZone,
+) -> anyhow::Result<jiff::Timestamp> {
+    let time: jiff::civil::Time = clock.parse()?;
+    let day = near.to_zoned(tz.clone()).date();
+    let mut best: Option<jiff::Timestamp> = None;
+    for offset in [-1, 0, 1] {
+        let d = day.checked_add(jiff::Span::new().days(offset))?;
+        let t = d.to_datetime(time).to_zoned(tz.clone())?.timestamp();
+        let dist = |x: jiff::Timestamp| x.duration_since(near).abs();
+        if best.is_none_or(|b| dist(t) < dist(b)) {
+            best = Some(t);
+        }
+    }
+    best.ok_or_else(|| anyhow::anyhow!("no time for {clock}"))
+}
+
+/// `PUT client-api /v1/users/{id}/intervals/{sessionId}`'s body, as the app
+/// sends it: the in-bed start and three back-to-back runs (awake, asleep,
+/// awake). The server rescores the stages inside the asleep run.
+pub fn edit_body(e: &Edges, tz: &jiff::tz::TimeZone) -> anyhow::Result<Value> {
+    if !(e.bed <= e.asleep && e.asleep < e.wake && e.wake <= e.out) {
+        let at = |t: jiff::Timestamp| t.to_zoned(tz.clone()).strftime("%a %-I:%M %p").to_string();
+        anyhow::bail!(
+            "times out of order: in bed {}, asleep {}, awake {}, out of bed {}",
+            at(e.bed),
+            at(e.asleep),
+            at(e.wake),
+            at(e.out)
+        );
+    }
+    let secs = |a: jiff::Timestamp, b: jiff::Timestamp| b.duration_since(a).as_secs();
+    Ok(json!({
+        "ts": e.bed.to_string(),
+        "stages": [
+            { "stage": "awake", "duration": secs(e.bed, e.asleep) },
+            { "stage": "asleep", "duration": secs(e.asleep, e.wake) },
+            { "stage": "awake", "duration": secs(e.wake, e.out) },
+        ],
+    }))
+}
+
 /// The sessions, oldest first, each with its start in unix seconds.
 fn sessions(day: &Value) -> Vec<(i64, &Value)> {
     let mut v: Vec<(i64, &Value)> = day["sessions"]
@@ -421,6 +506,40 @@ fn f_range(v: &Value) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn edits_a_session() {
+        let session = json!({
+            "ts": "2026-11-22T10:12:00.000Z",
+            "sleepStart": "2026-11-22T10:54:00.000Z",
+            "sleepEnd": "2026-11-22T18:30:00.000Z",
+            "presenceEnd": "2026-11-22T18:31:00.000Z",
+        });
+        let mut e = edges(&session).unwrap();
+        let la = jiff::tz::TimeZone::get("America/Los_Angeles").unwrap();
+        // 11:08 AM lands on the night's morning, not the day before or after.
+        e.wake = nearest("11:08:00", e.wake, &la).unwrap();
+        e.out = nearest("11:09:00", e.out, &la).unwrap();
+        assert_eq!(e.wake.to_string(), "2026-11-22T19:08:00Z");
+        // 11 PM, near 2:12 AM, is the evening before.
+        assert_eq!(
+            nearest("23:00:00", e.bed, &la).unwrap().to_string(),
+            "2026-11-22T07:00:00Z"
+        );
+        assert_eq!(
+            edit_body(&e, &la).unwrap(),
+            json!({
+                "ts": "2026-11-22T10:12:00Z",
+                "stages": [
+                    { "stage": "awake", "duration": 2520 },
+                    { "stage": "asleep", "duration": 29640 },
+                    { "stage": "awake", "duration": 60 },
+                ],
+            })
+        );
+        e.out = e.asleep;
+        assert!(edit_body(&e, &la).is_err());
+    }
 
     #[test]
     fn formats_durations() {

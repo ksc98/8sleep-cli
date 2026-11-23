@@ -110,7 +110,10 @@ enum Cmd {
     ///
     /// Last night by default. `--json` adds the API's whole night (every
     /// session's stages and timeseries) under `raw`.
+    #[command(args_conflicts_with_subcommands = true)]
     Sleep {
+        #[command(subcommand)]
+        sub: Option<SleepCmd>,
         /// Every night since: a duration (7d, 2w) or a date (2026-11-19).
         #[arg(long, value_parser = events::parse_since)]
         since: Option<jiff::Timestamp>,
@@ -146,6 +149,56 @@ enum Cmd {
         /// Which bedtime, by its number in `8sleep schedule`. Needed only when there's more than one.
         #[arg(short, long)]
         number: Option<usize>,
+    },
+    /// Call any Eight Sleep API endpoint and print its JSON
+    ///
+    /// For endpoints no command covers yet. PATH is on app-api
+    /// (`/v1/users/{user}/alarms`), on client-api with --client, or a full
+    /// https://*.8slp.net URL. `{user}` becomes your user id (or --side's).
+    Api {
+        path: String,
+        /// HTTP method.
+        #[arg(short = 'X', long, default_value = "GET", value_parser = parse_method)]
+        method: reqwest::Method,
+        /// JSON request body, or - to read it from stdin.
+        #[arg(short, long)]
+        data: Option<String>,
+        /// Use client-api.8slp.net instead of app-api.8slp.net.
+        #[arg(long)]
+        client: bool,
+    },
+}
+
+fn parse_method(s: &str) -> Result<reqwest::Method, String> {
+    let m = s.to_ascii_uppercase();
+    match m.as_str() {
+        "GET" | "PUT" | "POST" | "PATCH" | "DELETE" => Ok(m.parse().expect("valid method")),
+        _ => Err(format!("{s}: use GET, PUT, POST, PATCH or DELETE")),
+    }
+}
+
+#[derive(Subcommand)]
+enum SleepCmd {
+    /// Correct a night's times, as the app's session edit does.
+    ///
+    /// Give only the times to change (8:30am, 11pm, 23:00); each lands on the
+    /// day nearest its current value. Eight Sleep then rescores the stages.
+    Edit {
+        /// When you got in bed.
+        #[arg(long, value_parser = alarm::parse_time)]
+        bed: Option<String>,
+        /// When you fell asleep.
+        #[arg(long, value_parser = alarm::parse_time)]
+        asleep: Option<String>,
+        /// When you woke up.
+        #[arg(long, value_parser = alarm::parse_time)]
+        wake: Option<String>,
+        /// When you got out of bed.
+        #[arg(long, value_parser = alarm::parse_time)]
+        out: Option<String>,
+        /// The night to edit, by wake date (2026-11-22). Defaults to the latest.
+        #[arg(long)]
+        night: Option<jiff::civil::Date>,
     },
 }
 
@@ -347,9 +400,43 @@ fn run(cli: Cli) -> Result<()> {
             let user = target_user(&api, cli.side)?;
             events_cmd(&api, &user, since, cli.json)
         }
-        Cmd::Sleep { since } => {
+        Cmd::Sleep { sub: None, since } => {
             let user = target_user(&api, cli.side)?;
             sleep_cmd(&api, &user, since, cli.json)
+        }
+        Cmd::Sleep {
+            sub:
+                Some(SleepCmd::Edit {
+                    bed,
+                    asleep,
+                    wake,
+                    out,
+                    night,
+                }),
+            ..
+        } => {
+            let user = target_user(&api, cli.side)?;
+            let times = [bed, asleep, wake, out];
+            sleep_edit(&api, &user, night, times, cli.json)
+        }
+        Cmd::Api {
+            path,
+            method,
+            data,
+            client,
+        } => {
+            let user = target_user(&api, cli.side)?;
+            let url = api::raw_url(&path, client, &user)?;
+            let body = match data.as_deref() {
+                None => None,
+                Some("-") => Some(
+                    serde_json::from_reader(std::io::stdin().lock()).context("stdin isn't JSON")?,
+                ),
+                Some(d) => Some(serde_json::from_str(d).context("--data isn't JSON")?),
+            };
+            let v = api.send(method, &url, body)?;
+            println!("{}", serde_json::to_string_pretty(&v)?);
+            Ok(())
         }
         Cmd::Alarm {
             sub,
@@ -984,6 +1071,66 @@ fn sleep_cmd(api: &Api, user: &str, since: Option<jiff::Timestamp>, as_json: boo
         nights.truncate(1);
     }
     let list: Vec<Value> = nights.into_iter().map(sleep::summary).collect();
+    print_nights(&list, from, as_json)
+}
+
+/// The night `night` (a wake date), or the latest in the past week.
+fn one_night(api: &Api, user: &str, night: Option<jiff::civil::Date>) -> Result<Value> {
+    let today = jiff::Zoned::now().date();
+    let (from, to) = match night {
+        Some(d) => (d, d),
+        None => (today.checked_sub(jiff::Span::new().days(7))?, today),
+    };
+    let trends = api.get(&sleep::url(user, from, to))?;
+    match sleep::nights(&trends).first() {
+        Some(d) => Ok((*d).clone()),
+        None if night.is_some() => bail!("no sleep recorded on {from}"),
+        None => bail!("no sleep recorded since {from}"),
+    }
+}
+
+/// `8sleep sleep edit`: move a session's edges with the app's own request,
+/// then show the night as Eight Sleep rescored it.
+fn sleep_edit(
+    api: &Api,
+    user: &str,
+    night: Option<jiff::civil::Date>,
+    times: [Option<String>; 4],
+    as_json: bool,
+) -> Result<()> {
+    if times.iter().all(Option::is_none) {
+        bail!("nothing to change: give --bed, --asleep, --wake or --out");
+    }
+    let day = one_night(api, user, night)?;
+    let session = sleep::main_session(&day).context("that night has no session")?;
+    let id = session["id"].as_str().context("session has no id")?;
+    let tz = match session["timezone"].as_str() {
+        Some(name) => jiff::tz::TimeZone::get(name)?,
+        None => jiff::tz::TimeZone::system(),
+    };
+    let mut e = sleep::edges(session)?;
+    let [bed, asleep, wake, out] = times;
+    for (clock, edge) in [
+        (bed, &mut e.bed),
+        (asleep, &mut e.asleep),
+        (wake, &mut e.wake),
+        (out, &mut e.out),
+    ] {
+        if let Some(c) = clock {
+            *edge = sleep::nearest(&c, *edge, &tz)?;
+        }
+    }
+    let body = sleep::edit_body(&e, &tz)?;
+    api.put(&format!("{CLIENT_API}/users/{user}/intervals/{id}"), body)?;
+    let wake_date = e.wake.to_zoned(tz).date();
+    let list = vec![sleep::summary(&one_night(api, user, Some(wake_date))?)];
+    if !as_json {
+        println!("{}\n", ui::ok("night updated"));
+    }
+    print_nights(&list, wake_date, as_json)
+}
+
+fn print_nights(list: &[Value], from: jiff::civil::Date, as_json: bool) -> Result<()> {
     if as_json {
         println!("{}", serde_json::to_string_pretty(&list)?);
         return Ok(());

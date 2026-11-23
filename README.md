@@ -13,6 +13,8 @@ Command-line control for an Eight Sleep Pod.
 8sleep away on | off
 8sleep prime
 8sleep sleep [--since 7d]        # how you slept: stages, scores, heart rate, HRV, breathing, snoring, and the night drawn as a timeline (default: last night; --json adds every raw timeseries)
+8sleep sleep edit --wake 11:08am [--bed 2am --asleep 2:30am --out 11:15am] [--night 2026-11-22]
+                               # correct a night's times like the app's session edit (default: the latest night)
 8sleep events [--since 7d]       # what changed, newest first (default: last 24h; also a date: --since 2026-11-19)
 8sleep schedule                # bedtimes and the now / night / dawn levels (`bedtime` works too)
 8sleep bedtime 8:30pm [--days weekdays|weekends|daily|mon,wed]
@@ -25,6 +27,8 @@ Command-line control for an Eight Sleep Pod.
 8sleep alarm add 7am [--days weekdays|weekends|daily|mon,wed]
 8sleep alarm rm -n 2
 8sleep alarm test [--for 10s]     # ring a test alarm, then stop and remove it
+8sleep api /v1/users/{user}/alarms [-X PUT -d '{...}'] [--client]
+                               # any endpoint no command covers yet, as JSON ({user} is your user id)
 ```
 
 `--side left|right|solo` targets whoever is assigned to that side. Without it,
