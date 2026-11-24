@@ -262,10 +262,11 @@ enum Phase {
 }
 
 impl Phase {
-    /// The phase's key in the API's `smart` levels.
+    /// The phase's key in the API's `smart` levels. `now` is saved on the
+    /// bedtime instead (`startSettings.bedtime`), so it has none.
     fn smart_key(self) -> &'static str {
         match self {
-            Phase::Now => "bedTimeLevel",
+            Phase::Now => unreachable!("now is saved on the bedtime"),
             Phase::Night => "initialSleepLevel",
             Phase::Dawn => "finalSleepLevel",
         }
@@ -278,6 +279,13 @@ impl Phase {
             Phase::Dawn => "dawn",
         }
     }
+}
+
+/// Where `temp --phase` saves a level: the smart levels on `/temperature`,
+/// or the bedtime list on `/bedtime`.
+enum PhaseWrite {
+    Smart(Value),
+    Bedtime(Value),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -345,11 +353,32 @@ fn run(cli: Cli) -> Result<()> {
                 });
             }
             let phase = phase.unwrap_or(Phase::Now);
-            let mut smart = cur["smart"].clone();
-            if !smart.is_object() {
-                bail!("no smart schedule levels to change");
-            }
-            smart[phase.smart_key()] = json!(value);
+            // `now` is the bedtime's own start level (what the app edits);
+            // night and dawn are the smart levels.
+            let write = if phase == Phase::Now {
+                let id = bedtime_schedule(&cur, state_type(&cur))["id"]
+                    .as_str()
+                    .context("no bedtime schedule to save a now level in; add one with `8sleep schedule add 11pm`")?
+                    .to_owned();
+                let pod = api.get(&format!("{APP_API}/users/{user}/temperature/pod"))?;
+                let mut schedules = pod["schedules"].as_array().cloned().unwrap_or_default();
+                let s = schedules
+                    .iter_mut()
+                    .find(|s| s["id"] == id.as_str())
+                    .context("the next bedtime isn't in the schedule list")?;
+                if !s["startSettings"].is_object() {
+                    s["startSettings"] = json!({});
+                }
+                s["startSettings"]["bedtime"] = json!(value);
+                PhaseWrite::Bedtime(json!({ "schedules": schedules }))
+            } else {
+                let mut smart = cur["smart"].clone();
+                if !smart.is_object() {
+                    bail!("no smart schedule levels to change");
+                }
+                smart[phase.smart_key()] = json!(value);
+                PhaseWrite::Smart(json!({ "smart": smart }))
+            };
             let mut msg = format!("schedule {} set to {level}", phase.name());
             if apply {
                 msg.push_str(if off {
@@ -361,7 +390,13 @@ fn run(cli: Cli) -> Result<()> {
                 msg.push_str("; the bed stays off");
             }
             print_side(&api, &user, cli.json, &msg, || {
-                let mut t = api.put(&url, json!({ "smart": smart }))?;
+                let mut t = match write {
+                    PhaseWrite::Smart(body) => api.put(&url, body)?,
+                    PhaseWrite::Bedtime(body) => {
+                        api.put(&format!("{APP_API}/users/{user}/bedtime"), body)?;
+                        api.get(&url)?
+                    }
+                };
                 if apply {
                     if off {
                         set_state(&api, &user, "smart")?;
@@ -577,7 +612,11 @@ fn schedule_edit_show(
         let mut v = api.get(&format!("{APP_API}/users/{user}/temperature/pod"))?;
         let mut list = v["schedules"].as_array().cloned().unwrap_or_default();
         list.sort_by(|a, b| a["time"].as_str().cmp(&b["time"].as_str()));
-        Ok((list, v["devices"][0].take()))
+        let mut t = v["devices"][0].take();
+        // The `now` level lives on the bedtime, which `devices[0]` lacks.
+        t["currentSchedule"] = v["currentSchedule"].take();
+        t["nextSchedule"] = v["nextSchedule"].take();
+        Ok((list, t))
     };
     let (mut schedules, mut t) = read()?;
     let pick = |n: Option<usize>, len: usize| -> Result<usize> {
@@ -1009,21 +1048,44 @@ fn bedtime_days(sched: &Value) -> Value {
 }
 
 /// The smart schedule's three phases, in order: (state suffix and
-/// `overrideLevels` key, `smart` key).
+/// `overrideLevels` key, `smart` key). The bedtime phase's level is the
+/// bedtime's own `startSettings.bedtime`, which the app edits and the pod
+/// starts at; `smart.bedTimeLevel` is only a fallback.
 const PHASES: [(&str, &str); 3] = [
     ("bedtime", "bedTimeLevel"),
     ("initial", "initialSleepLevel"),
     ("final", "finalSleepLevel"),
 ];
 
+/// The bedtime the `now` level belongs to: the running one while the bed is
+/// on, else the next one.
+fn bedtime_schedule<'a>(t: &'a Value, state: &str) -> &'a Value {
+    let (first, second) = if state == "off" {
+        ("nextSchedule", "currentSchedule")
+    } else {
+        ("currentSchedule", "nextSchedule")
+    };
+    if t[first].is_object() {
+        &t[first]
+    } else {
+        &t[second]
+    }
+}
+
 /// Each phase's effective level. A `temp` change during a phase lands in
 /// `overrideLevels.<phase>` and wins over the schedule's level.
 fn phases(t: &Value, state: &str) -> Value {
     let active = state.strip_prefix("smart:");
+    let start = bedtime_schedule(t, state)["startSettings"]["bedtime"].as_i64();
     PHASES
         .iter()
         .map(|&(name, key)| {
-            let scheduled = t["smart"][key].as_i64();
+            let smart = t["smart"][key].as_i64();
+            let scheduled = if name == "bedtime" {
+                start.or(smart)
+            } else {
+                smart
+            };
             let overridden = t["overrideLevels"][name].as_i64();
             let level = overridden.or(scheduled);
             json!({
@@ -1365,6 +1427,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn now_level_comes_from_the_bedtime() {
+        let t = json!({
+            "smart": { "bedTimeLevel": 1, "initialSleepLevel": 10, "finalSleepLevel": 10 },
+            "currentSchedule": { "id": "a", "startSettings": { "bedtime": 30 } },
+            "nextSchedule": { "id": "b", "startSettings": { "bedtime": 20 } },
+        });
+        // Off: the next bedtime's level. On: the running one's.
+        assert_eq!(phases(&t, "off")[0]["level"], 20);
+        assert_eq!(phases(&t, "smart:initial")[0]["level"], 30);
+        assert_eq!(phases(&t, "off")[1]["level"], 10);
+        // No bedtime level: the smart one.
+        let t = json!({ "smart": { "bedTimeLevel": 1 }, "nextSchedule": { "startSettings": {} } });
+        assert_eq!(phases(&t, "off")[0]["level"], 1);
+    }
+
+    #[test]
     fn phases_apply_overrides_and_mark_active() {
         let t = json!({
             "smart": { "bedTimeLevel": 0, "initialSleepLevel": -14, "finalSleepLevel": 3 },
@@ -1372,6 +1450,7 @@ mod tests {
         });
         let p = phases(&t, "smart:bedtime");
         assert_eq!(p[0]["level"], -60);
+        assert_eq!(p[0]["scheduled"], 0);
         assert_eq!(p[0]["overridden"], true);
         assert_eq!(p[0]["active"], true);
         assert_eq!(p[1]["level"], -14);
