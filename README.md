@@ -11,7 +11,8 @@ Command-line control for an Eight Sleep Pod.
 8sleep temp -1 --phase night   # save a phase's level in the schedule (now / night / dawn)
 8sleep temp 0 --apply          # save it and run at it now, turning the bed on if needed
 8sleep away on | off
-8sleep prime
+8sleep prime                   # priming: running or not (with progress), schedule, recent primes
+8sleep prime start             # prime now (runs the pump for a few minutes)
 8sleep sleep [--since 7d]        # how you slept: stages, scores, heart rate, HRV, breathing, snoring, and the night drawn as a timeline (default: last night; --json adds every raw timeseries)
 8sleep sleep edit --wake 11:08am [--bed 2am --asleep 2:30am --out 11:15am] [--night 2026-11-22]
                                # correct a night's times like the app's session edit (default: the latest night)

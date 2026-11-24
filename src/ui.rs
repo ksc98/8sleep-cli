@@ -159,7 +159,7 @@ fn marker_value(
 }
 
 /// `  ◆ target   81°F`: an optional bar marker, a dimmed label, the value.
-fn row(mark: &str, label: &str, value: impl std::fmt::Display) -> String {
+pub fn row(mark: &str, label: &str, value: impl std::fmt::Display) -> String {
     let mark = if mark.is_empty() {
         " ".to_string()
     } else {

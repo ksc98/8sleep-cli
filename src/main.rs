@@ -3,6 +3,7 @@ mod api;
 mod auth;
 mod config;
 mod events;
+mod prime;
 mod sleep;
 mod temp;
 mod timeline;
@@ -96,8 +97,13 @@ enum Cmd {
         #[arg(value_enum)]
         state: Toggle,
     },
-    /// Prime the water tank
-    Prime,
+    /// Show priming: whether a prime is running, the schedule, recent primes
+    ///
+    /// `8sleep prime start` primes now.
+    Prime {
+        #[command(subcommand)]
+        sub: Option<PrimeCmd>,
+    },
     /// Show what changed: power, dial, schedule and level edits, Autopilot
     ///
     /// Newest first, from the account's event log.
@@ -200,6 +206,12 @@ enum SleepCmd {
         #[arg(long)]
         night: Option<jiff::civil::Date>,
     },
+}
+
+#[derive(Subcommand)]
+enum PrimeCmd {
+    /// Prime the water system now (runs the pump for a few minutes).
+    Start,
 }
 
 #[derive(Subcommand)]
@@ -382,7 +394,10 @@ fn run(cli: Cli) -> Result<()> {
                 api.get(&format!("{APP_API}/users/{user}/temperature"))
             })
         }
-        Cmd::Prime => {
+        Cmd::Prime { sub: None } => prime_cmd(&api, cli.json),
+        Cmd::Prime {
+            sub: Some(PrimeCmd::Start),
+        } => {
             let device_id = device_id(&api)?;
             let uid = api.user_id().to_owned();
             api.post(
@@ -1172,6 +1187,30 @@ fn events_cmd(api: &Api, user: &str, since: jiff::Timestamp, as_json: bool) -> R
     }
     for line in ui::event_lines(&list) {
         println!("{line}");
+    }
+    Ok(())
+}
+
+/// `8sleep prime`: live state, schedule and history in one concurrent round.
+fn prime_cmd(api: &Api, as_json: bool) -> Result<()> {
+    let id = device_id(api)?;
+    let base = format!("{APP_API}/devices/{id}");
+    let (status, tasks, schedule) = std::thread::scope(|sc| {
+        let tasks = sc.spawn(|| api.get(&format!("{base}/priming/tasks")));
+        let schedule = sc.spawn(|| api.get(&format!("{base}/priming/schedule")));
+        (
+            api.get(&format!("{base}/status")),
+            join(tasks),
+            join(schedule),
+        )
+    });
+    let s = prime::summary(&status?, &tasks?, &schedule?);
+    if as_json {
+        println!("{}", serde_json::to_string_pretty(&s)?);
+    } else {
+        for line in prime::lines(&s) {
+            println!("{line}");
+        }
     }
     Ok(())
 }
