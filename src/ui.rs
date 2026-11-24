@@ -74,22 +74,24 @@ fn gauge_cell(raw: i32) -> i32 {
     ((raw.clamp(-100, 100) + 100) as f64 * (GAUGE_CELLS - 1) as f64 / 200.0).round() as i32
 }
 
-/// A cool→warm bar marking the target (◆) and, when known, the current
-/// level (`NOW_MARK`). While the bed is on, the stretch between them is drawn heavy to
-/// show which way it's heading; when it's off nothing is heading anywhere.
-fn gauge(target: i32, now: Option<i32>, on: bool) -> String {
-    let t = gauge_cell(target);
+/// A cool→warm bar marking the target (◆, only while the bed is on) and,
+/// when known, the current level (`NOW_MARK`). The stretch between them is
+/// drawn heavy to show which way it's heading.
+fn gauge(target: Option<i32>, now: Option<i32>) -> String {
+    let t = target.map(gauge_cell);
     let n = now.map(gauge_cell);
-    let (lo, hi) = match n {
-        Some(n) if on => (n.min(t), n.max(t)),
-        _ => (t, t),
+    let (lo, hi) = match (n, t) {
+        (Some(n), Some(t)) => (n.min(t), n.max(t)),
+        _ => (0, 0),
     };
     let bar: String = (0..GAUGE_CELLS)
         .map(|i| {
             let (r, g, b) = level_rgb(i * 200 / (GAUGE_CELLS - 1) - 100);
             // Each marker takes the color of the level it marks.
-            if i == t {
-                colored_level(TARGET_MARK, target).bold().to_string()
+            if let (Some(cell), Some(level)) = (t, target)
+                && i == cell
+            {
+                colored_level(TARGET_MARK, level).bold().to_string()
             } else if let (Some(cell), Some(level)) = (n, now)
                 && i == cell
             {
@@ -244,18 +246,20 @@ pub fn side_block(title: Option<&str>, you: bool, s: &Value) -> Vec<String> {
         head.push_str(&format!("   {}", power(s)));
         lines.push(head);
     }
-    let on = s["on"].as_bool() == Some(true);
+    // No target while the bed is off; the API keeps reporting the current
+    // level then.
     let target = s["target"].as_i64().map(|v| v as i32);
-    // The API keeps reporting the current level while the bed is off.
     let now = s["level"].as_i64().map(|v| v as i32);
-    if let Some(t) = target {
+    if target.is_some() || now.is_some() {
         // The target's value sits centered over the diamond; the current
         // level's sits below the bar behind a pointer up at its dot.
         let cell0 = ROW_INDENT + GAUGE_LEAD;
         let end = cell0 + GAUGE_CELLS as usize + GAUGE_LEAD;
         let col = |raw| cell0 + gauge_cell(raw) as usize;
-        lines.push(marker_value(t, false, true, None, col(t), ROW_INDENT, end));
-        lines.push(row("", "", gauge(t, now, on)));
+        if let Some(t) = target {
+            lines.push(marker_value(t, false, true, None, col(t), ROW_INDENT, end));
+        }
+        lines.push(row("", "", gauge(target, now)));
         if let Some(n) = now {
             lines.push(marker_value(
                 n,

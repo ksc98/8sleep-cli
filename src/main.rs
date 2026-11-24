@@ -1013,7 +1013,12 @@ fn side_with(api: &Api, user: &str, temperature: impl FnOnce() -> Result<Value>)
     let alarms = alarms.ok();
     let state = state_type(&t).to_owned();
     let level = t["currentDeviceLevel"].as_i64().map(|v| v as i32);
-    let target = t["currentLevel"].as_i64().map(|v| v as i32);
+    // While off, `currentLevel` is a placeholder 0, not where the bed would
+    // start (that's the `now` phase level), so there's no target.
+    let target = t["currentLevel"]
+        .as_i64()
+        .map(|v| v as i32)
+        .filter(|_| state != "off");
     Ok(json!({
         "on": state != "off",
         "state": state,
